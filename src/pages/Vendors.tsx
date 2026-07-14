@@ -79,6 +79,7 @@ export default function Vendors() {
 
   async function saveVendor(e: FormEvent) {
     e.preventDefault()
+    if (!user) return alert('Session tidak valid. Sila refresh halaman.')
     if (!form.nama.trim()) return alert('Nama vendor wajib diisi.')
     if (form.whatsapp && !validateWhatsApp(form.whatsapp)) {
       return alert('Nomor WhatsApp tidak valid (10–15 digit).')
@@ -86,7 +87,7 @@ export default function Vendors() {
     setSaving(true)
 
     const payload = {
-      user_id: user!.id,
+      user_id: user.id,
       nama: form.nama.trim(),
       whatsapp: form.whatsapp.trim() || null,
       harga_kolase_sudah_pilih: form.harga_kolase_sudah_pilih,
