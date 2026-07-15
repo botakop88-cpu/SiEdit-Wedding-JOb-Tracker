@@ -102,58 +102,29 @@ export default function Vendors() {
   }
 
   async function syncPriceItems(vendorId: string, items: { nama_produk: string; harga: number }[]) {
-    if (!user) return
+    if (!user) throw new Error('Session tidak valid.')
 
-    // Get existing items from DB for this vendor
-    const { data: existing } = await supabase
+    // Simpler approach: delete ALL existing, then re-insert.
+    // Avoids position-matching bugs, and for single-user app concurrency isn't an issue.
+    const { error: delErr } = await supabase
       .from('vendor_price_item')
-      .select('id, nama_produk, harga')
+      .delete()
       .eq('vendor_id', vendorId)
+      .eq('user_id', user.id)
+    if (delErr) throw new Error('Gagal hapus produk lama: ' + delErr.message)
 
-    const existingMap = new Map<string, VendorPriceItem>()
-    for (const e of (existing ?? []) as VendorPriceItem[]) {
-      existingMap.set(e.id, e)
-    }
+    if (items.length === 0) return
 
-    // Determine what to delete, update, insert
-    const deleteIds: string[] = []
-    const newItems: { nama_produk: string; harga: number; urutan: number }[] = []
-
-    // If we loaded existing items, match by position
-    const oldItems = (existing ?? []) as VendorPriceItem[]
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      // Try to match by index to existing (since we loaded in order)
-      if (i < oldItems.length) {
-        const old = oldItems[i]
-        if (item.nama_produk !== old.nama_produk || item.harga !== old.harga) {
-          await supabase.from('vendor_price_item').update({
-            nama_produk: item.nama_produk,
-            harga: item.harga,
-            urutan: i,
-          }).eq('id', old.id)
-        }
-      } else {
-        newItems.push({ nama_produk: item.nama_produk, harga: item.harga, urutan: i })
-      }
-    }
-
-    // Items beyond the new length should be deleted
-    if (items.length < oldItems.length) {
-      for (let i = items.length; i < oldItems.length; i++) {
-        deleteIds.push(oldItems[i].id)
-      }
-    }
-
-    if (deleteIds.length > 0) {
-      await supabase.from('vendor_price_item').delete().in('id', deleteIds)
-    }
-    if (newItems.length > 0) {
-      await supabase.from('vendor_price_item').insert(
-        newItems.map((n) => ({ ...n, vendor_id: vendorId, user_id: user.id }))
-      )
-    }
+    const { error: insErr } = await supabase.from('vendor_price_item').insert(
+      items.map((item, idx) => ({
+        vendor_id: vendorId,
+        user_id: user.id,
+        nama_produk: item.nama_produk,
+        harga: item.harga,
+        urutan: idx,
+      }))
+    )
+    if (insErr) throw new Error('Gagal simpan produk: ' + insErr.message)
   }
 
   async function saveVendor(e: FormEvent) {
@@ -195,7 +166,13 @@ export default function Vendors() {
 
     // Sync price items
     if (vendorId) {
-      await syncPriceItems(vendorId, validItems)
+      try {
+        await syncPriceItems(vendorId, validItems)
+      } catch (e: any) {
+        alert(e?.message ?? 'Gagal menyimpan daftar produk.')
+        setSaving(false)
+        return
+      }
     }
 
     setModal(false)
