@@ -220,15 +220,12 @@ export default function Invoices() {
 
   async function softDelete(id: string) {
     if (!confirm('Hapus invoice ini?')) return
-    try {
-      const res = await fetch(`/api/delete-invoice?id=${id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok) {
-        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
-        return
-      }
-    } catch (e) {
-      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+    const { error } = await supabase
+      .from('invoice')
+      .update({ deleted_at: new Date().toISOString(), user_id: user!.id })
+      .eq('id', id)
+    if (error) {
+      alert('Gagal hapus: ' + error.message)
       return
     }
     await loadInitial()

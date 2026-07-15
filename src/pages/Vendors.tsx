@@ -119,15 +119,12 @@ export default function Vendors() {
       return alert(`Vendor masih memiliki ${v.total_job} job aktif. Pindahkan/hapus job dulu.`)
     }
     if (!confirm(`Hapus vendor "${v.nama}"?`)) return
-    try {
-      const res = await fetch(`/api/delete-vendor?id=${v.id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok) {
-        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
-        return
-      }
-    } catch (e) {
-      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+    const { error } = await supabase
+      .from('vendor')
+      .update({ deleted_at: new Date().toISOString(), user_id: user!.id })
+      .eq('id', v.id)
+    if (error) {
+      alert('Gagal hapus: ' + error.message)
       return
     }
     await loadData()

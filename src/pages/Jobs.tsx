@@ -130,15 +130,12 @@ export default function Jobs() {
 
   async function softDelete(id: string) {
     if (!confirm('Hapus job ini?')) return
-    try {
-      const res = await fetch(`/api/delete-job?id=${id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok) {
-        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
-        return
-      }
-    } catch (e) {
-      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+    const { error } = await supabase
+      .from('job')
+      .update({ deleted_at: new Date().toISOString(), user_id: user!.id })
+      .eq('id', id)
+    if (error) {
+      alert('Gagal hapus: ' + error.message)
       return
     }
     await loadData()
@@ -150,18 +147,10 @@ export default function Jobs() {
     let error
     if (action === 'hapus') {
       if (!confirm(`Hapus ${ids.length} job?`)) return
-      try {
-        for (const id of ids) {
-          const res = await fetch(`/api/delete-job?id=${id}`, { method: 'DELETE' })
-          const data = await res.json()
-          if (!res.ok) {
-            error = data.error || 'Unknown error'
-            break
-          }
-        }
-      } catch (e) {
-        error = e instanceof Error ? e.message : 'Network error'
-      }
+      ;({ error } = await supabase.from('job').update({
+        deleted_at: new Date().toISOString(),
+        user_id: user!.id,
+      }).in('id', ids))
     } else if (action === 'lunas') {
       ;({ error } = await supabase.from('job').update({
         status_bayar: 'Lunas',

@@ -31,35 +31,25 @@ export default function Settings() {
       invoices: iC.count ?? 0,
     })
 
-    // Load deleted items via API (bypasses RLS)
-    try {
-      const [jRes, vRes, iRes] = await Promise.all([
-        fetch('/api/recycle-bin?table=job'),
-        fetch('/api/recycle-bin?table=vendor'),
-        fetch('/api/recycle-bin?table=invoice'),
-      ])
-      const [jData, vData, iData] = await Promise.all([
-        jRes.json(), vRes.json(), iRes.json(),
-      ])
-      if (jRes.ok) setDeletedJobs(jData.data as Job[])
-      if (vRes.ok) setDeletedVendors(vData.data as Vendor[])
-      if (iRes.ok) setDeletedInvoices(iData.data as Invoice[])
-    } catch {
-      // silently fallback — recycle bin stays empty
-    }
+    // Load deleted items directly via Supabase (RLS will filter by user_id)
+    const [jRes, vRes, iRes] = await Promise.all([
+      supabase.from('job').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      supabase.from('vendor').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      supabase.from('invoice').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+    ])
+    if (jRes.data) setDeletedJobs(jRes.data as Job[])
+    if (vRes.data) setDeletedVendors(vRes.data as Vendor[])
+    if (iRes.data) setDeletedInvoices(iRes.data as Invoice[])
     setLoading(false)
   }
 
   async function restore(table: string, id: string) {
-    try {
-      const res = await fetch(`/api/recycle-bin?table=${table}&id=${id}`, { method: 'PUT' })
-      const data = await res.json()
-      if (!res.ok) {
-        alert('Gagal pulihkan: ' + (data.error || 'Unknown error'))
-        return
-      }
-    } catch (e) {
-      alert('Gagal pulihkan: ' + (e instanceof Error ? e.message : 'Network error'))
+    const { error } = await supabase
+      .from(table)
+      .update({ deleted_at: null, user_id: user!.id })
+      .eq('id', id)
+    if (error) {
+      alert('Gagal pulihkan: ' + error.message)
       return
     }
     await loadAll()
@@ -67,15 +57,12 @@ export default function Settings() {
 
   async function hardDelete(table: string, id: string) {
     if (!confirm('Hapus permanen? Tindakan ini tidak dapat dibatalkan.')) return
-    try {
-      const res = await fetch(`/api/recycle-bin?table=${table}&id=${id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok) {
-        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
-        return
-      }
-    } catch (e) {
-      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+    const { error } = await supabase
+      .from(table)
+      .delete()
+      .eq('id', id)
+    if (error) {
+      alert('Gagal hapus: ' + error.message)
       return
     }
     await loadAll()
@@ -90,14 +77,22 @@ export default function Settings() {
       deletedInvoices.length > 0 && `${deletedInvoices.length} invoice`,
     ].filter(Boolean).join(', ')
     if (!confirm(`Kosongkan seluruh sampah?\n\n${detail} akan dihapus permanen.\nTindakan ini tidak dapat dibatalkan!`)) return
-    try {
-      await Promise.all([
-        fetch('/api/recycle-bin?table=job&all=true', { method: 'DELETE' }),
-        fetch('/api/recycle-bin?table=vendor&all=true', { method: 'DELETE' }),
-        fetch('/api/recycle-bin?table=invoice&all=true', { method: 'DELETE' }),
-      ])
-    } catch (e) {
-      alert('Gagal kosongkan sampah: ' + (e instanceof Error ? e.message : 'Network error'))
+    
+    const promises = []
+    if (deletedJobs.length > 0) {
+      promises.push(supabase.from('job').delete().in('id', deletedJobs.map(j => j.id)))
+    }
+    if (deletedVendors.length > 0) {
+      promises.push(supabase.from('vendor').delete().in('id', deletedVendors.map(v => v.id)))
+    }
+    if (deletedInvoices.length > 0) {
+      promises.push(supabase.from('invoice').delete().in('id', deletedInvoices.map(i => i.id)))
+    }
+    
+    const results = await Promise.all(promises)
+    const errors = results.filter(r => r.error).map(r => r.error!.message)
+    if (errors.length > 0) {
+      alert('Gagal kosongkan sampah: ' + errors.join(', '))
       return
     }
     await loadAll()
