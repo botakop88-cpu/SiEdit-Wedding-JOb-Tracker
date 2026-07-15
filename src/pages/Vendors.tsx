@@ -3,7 +3,7 @@ import { Plus, Pencil, Trash2, X, Phone } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import type { Vendor, VendorPriceItem } from '../lib/types'
-import { rupiah, validateWhatsApp } from '../lib/utils'
+import { rupiah, formatRibuan, parseRibuan, validateWhatsApp } from '../lib/utils'
 
 interface VendorStats extends Vendor {
   total_job: number
@@ -328,10 +328,10 @@ export default function Vendors() {
                         className={`flex-1 min-w-0 ${inputClsNoFull}`}
                       />
                       <input
-                        type="number"
-                        min={0}
-                        value={item.harga}
-                        onChange={(e) => updatePriceItem(idx, 'harga', e.target.value === '' ? 0 : Number(e.target.value))}
+                        type="text"
+                        inputMode="numeric"
+                        value={item.harga ? formatRibuan(item.harga) : ''}
+                        onChange={(e) => updatePriceItem(idx, 'harga', parseRibuan(e.target.value))}
                         placeholder="Harga"
                         className={`w-24 shrink-0 ${inputClsNoFull}`}
                       />

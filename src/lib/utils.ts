@@ -9,6 +9,19 @@ export function rupiah(amount: number): string {
   }).format(amount)
 }
 
+// ─── Ribuan formatting (for input display, NO currency symbol) ────────
+
+export function formatRibuan(value: number | string): string {
+  const num = typeof value === 'string' ? parseInt(value.replace(/[^\d]/g, ''), 10) : value
+  if (isNaN(num) || num === 0) return ''
+  return num.toLocaleString('id-ID')
+}
+
+export function parseRibuan(value: string): number {
+  const digits = value.replace(/[^\d]/g, '')
+  return digits ? parseInt(digits, 10) : 0
+}
+
 // ─── Date formatting ───────────────────────────────────────────
 
 export function formatDate(dateStr: string | null | undefined): string {

@@ -8,7 +8,7 @@ import type {
 import {
   STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS,
 } from '../lib/types'
-import { rupiah, formatDate, daysUntil, todayStr } from '../lib/utils'
+import { rupiah, formatDate, daysUntil, todayStr, formatRibuan, parseRibuan } from '../lib/utils'
 
 const EMPTY_FORM = {
   vendor_id: '',
@@ -442,10 +442,10 @@ export default function Jobs() {
                 </Field>
                 <Field label="Harga">
                   <input
-                    type="number"
-                    min={0}
-                    value={form.harga}
-                    onChange={(e) => setField('harga', Number(e.target.value))}
+                    type="text"
+                    inputMode="numeric"
+                    value={form.harga ? formatRibuan(form.harga) : ''}
+                    onChange={(e) => setField('harga', parseRibuan(e.target.value))}
                     className={inputCls}
                     disabled={!form.vendor_id || jenisOptions.length === 0}
                   />
