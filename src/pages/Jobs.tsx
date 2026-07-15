@@ -134,6 +134,7 @@ export default function Jobs() {
       .from('job')
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', id)
+      .eq('user_id', user!.id)
     if (error) {
       alert('Gagal hapus: ' + error.message)
       return
@@ -149,7 +150,7 @@ export default function Jobs() {
       if (!confirm(`Hapus ${ids.length} job?`)) return
       ;({ error } = await supabase.from('job').update({
         deleted_at: new Date().toISOString(),
-      }).in('id', ids))
+      }).in('id', ids).eq('user_id', user!.id))
     } else if (action === 'lunas') {
       ;({ error } = await supabase.from('job').update({
         status_bayar: 'Lunas',

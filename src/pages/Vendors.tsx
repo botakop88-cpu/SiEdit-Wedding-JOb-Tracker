@@ -120,6 +120,7 @@ export default function Vendors() {
       .from('vendor')
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', v.id)
+      .eq('user_id', user!.id)
     if (error) {
       alert('Gagal hapus: ' + error.message)
       return
