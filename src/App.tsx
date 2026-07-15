@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Suspense, lazy } from 'react'
-import { AuthProvider } from './lib/AuthContext'
+import { AuthProvider, useAuth } from './lib/AuthContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import AppLayout from './components/AppLayout'
 import Login from './pages/Login'
@@ -23,6 +23,12 @@ function LoadingFallback() {
   )
 }
 
+function CatchAll() {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  return <Navigate to={user ? '/dashboard' : '/login'} replace />
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -40,7 +46,7 @@ export default function App() {
               <Route path="/invoices" element={<Suspense fallback={<LoadingFallback />}><Invoices /></Suspense>} />
               <Route path="/settings" element={<Suspense fallback={<LoadingFallback />}><Settings /></Suspense>} />
             </Route>
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<CatchAll />} />
           </Routes>
         </ErrorBoundary>
       </AuthProvider>
