@@ -20,33 +20,64 @@ export default function Settings() {
 
   async function loadAll() {
     setLoading(true)
-    const [jC, vC, iC, jD, vD, iD] = await Promise.all([
+    const [jC, vC, iC] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('vendor').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('invoice').select('*', { count: 'exact', head: true }).is('deleted_at', null),
-      supabase.from('job').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-      supabase.from('vendor').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-      supabase.from('invoice').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
     ])
     setCounts({
       jobs: jC.count ?? 0,
       vendors: vC.count ?? 0,
       invoices: iC.count ?? 0,
     })
-    if (jD.data) setDeletedJobs(jD.data as Job[])
-    if (vD.data) setDeletedVendors(vD.data as Vendor[])
-    if (iD.data) setDeletedInvoices(iD.data as Invoice[])
+
+    // Load deleted items via API (bypasses RLS)
+    try {
+      const [jRes, vRes, iRes] = await Promise.all([
+        fetch('/api/recycle-bin?table=job'),
+        fetch('/api/recycle-bin?table=vendor'),
+        fetch('/api/recycle-bin?table=invoice'),
+      ])
+      const [jData, vData, iData] = await Promise.all([
+        jRes.json(), vRes.json(), iRes.json(),
+      ])
+      if (jRes.ok) setDeletedJobs(jData.data as Job[])
+      if (vRes.ok) setDeletedVendors(vData.data as Vendor[])
+      if (iRes.ok) setDeletedInvoices(iData.data as Invoice[])
+    } catch {
+      // silently fallback — recycle bin stays empty
+    }
     setLoading(false)
   }
 
   async function restore(table: string, id: string) {
-    await supabase.from(table).update({ deleted_at: null }).eq('id', id)
+    try {
+      const res = await fetch(`/api/recycle-bin?table=${table}&id=${id}`, { method: 'PUT' })
+      const data = await res.json()
+      if (!res.ok) {
+        alert('Gagal pulihkan: ' + (data.error || 'Unknown error'))
+        return
+      }
+    } catch (e) {
+      alert('Gagal pulihkan: ' + (e instanceof Error ? e.message : 'Network error'))
+      return
+    }
     await loadAll()
   }
 
   async function hardDelete(table: string, id: string) {
     if (!confirm('Hapus permanen? Tindakan ini tidak dapat dibatalkan.')) return
-    await supabase.from(table).delete().eq('id', id)
+    try {
+      const res = await fetch(`/api/recycle-bin?table=${table}&id=${id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) {
+        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
+        return
+      }
+    } catch (e) {
+      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+      return
+    }
     await loadAll()
   }
 
@@ -59,11 +90,16 @@ export default function Settings() {
       deletedInvoices.length > 0 && `${deletedInvoices.length} invoice`,
     ].filter(Boolean).join(', ')
     if (!confirm(`Kosongkan seluruh sampah?\n\n${detail} akan dihapus permanen.\nTindakan ini tidak dapat dibatalkan!`)) return
-    await Promise.all([
-      supabase.from('job').delete().not('deleted_at', 'is', null),
-      supabase.from('vendor').delete().not('deleted_at', 'is', null),
-      supabase.from('invoice').delete().not('deleted_at', 'is', null),
-    ])
+    try {
+      await Promise.all([
+        fetch('/api/recycle-bin?table=job&all=true', { method: 'DELETE' }),
+        fetch('/api/recycle-bin?table=vendor&all=true', { method: 'DELETE' }),
+        fetch('/api/recycle-bin?table=invoice&all=true', { method: 'DELETE' }),
+      ])
+    } catch (e) {
+      alert('Gagal kosongkan sampah: ' + (e instanceof Error ? e.message : 'Network error'))
+      return
+    }
     await loadAll()
   }
 

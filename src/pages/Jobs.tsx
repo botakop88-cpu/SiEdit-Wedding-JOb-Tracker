@@ -130,28 +130,56 @@ export default function Jobs() {
 
   async function softDelete(id: string) {
     if (!confirm('Hapus job ini?')) return
-    await supabase.from('job').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    try {
+      const res = await fetch(`/api/delete-job?id=${id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) {
+        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
+        return
+      }
+    } catch (e) {
+      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+      return
+    }
     await loadData()
   }
 
   async function bulkAction(action: 'lunas' | 'belum' | 'hapus') {
     if (selected.size === 0) return
     const ids = Array.from(selected)
+    let error
     if (action === 'hapus') {
       if (!confirm(`Hapus ${ids.length} job?`)) return
-      await supabase.from('job').update({ deleted_at: new Date().toISOString() }).in('id', ids)
+      try {
+        for (const id of ids) {
+          const res = await fetch(`/api/delete-job?id=${id}`, { method: 'DELETE' })
+          const data = await res.json()
+          if (!res.ok) {
+            error = data.error || 'Unknown error'
+            break
+          }
+        }
+      } catch (e) {
+        error = e instanceof Error ? e.message : 'Network error'
+      }
     } else if (action === 'lunas') {
-      await supabase.from('job').update({
+      ;({ error } = await supabase.from('job').update({
         status_bayar: 'Lunas',
         tanggal_lunas: todayStr(),
         updated_at: new Date().toISOString(),
-      }).in('id', ids)
+        user_id: user!.id,
+      }).in('id', ids))
     } else {
-      await supabase.from('job').update({
+      ;({ error } = await supabase.from('job').update({
         status_bayar: 'Belum Bayar',
         tanggal_lunas: null,
         updated_at: new Date().toISOString(),
-      }).in('id', ids)
+        user_id: user!.id,
+      }).in('id', ids))
+    }
+    if (error) {
+      alert('Gagal: ' + error.message)
+      return
     }
     await loadData()
   }

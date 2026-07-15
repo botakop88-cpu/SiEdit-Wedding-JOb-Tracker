@@ -193,7 +193,7 @@ export default function Invoices() {
 
     const { error: invErr } = await supabase
       .from('invoice')
-      .update({ status_bayar: newStatus })
+      .update({ status_bayar: newStatus, user_id: user!.id })
       .eq('id', inv.id)
 
     if (invErr) return alert('Gagal update invoice: ' + invErr.message)
@@ -202,6 +202,7 @@ export default function Invoices() {
     const jobUpdate: Record<string, unknown> = {
       status_bayar: newStatus,
       updated_at: new Date().toISOString(),
+      user_id: user!.id,
     }
     if (newStatus === 'Lunas') jobUpdate.tanggal_lunas = todayStr()
     else jobUpdate.tanggal_lunas = null
@@ -219,7 +220,17 @@ export default function Invoices() {
 
   async function softDelete(id: string) {
     if (!confirm('Hapus invoice ini?')) return
-    await supabase.from('invoice').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    try {
+      const res = await fetch(`/api/delete-invoice?id=${id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) {
+        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
+        return
+      }
+    } catch (e) {
+      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+      return
+    }
     await loadInitial()
   }
 

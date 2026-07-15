@@ -98,7 +98,10 @@ export default function Vendors() {
 
     let error
     if (editing) {
-      ;({ error } = await supabase.from('vendor').update(payload).eq('id', editing.id))
+      ;({ error } = await supabase.from('vendor').update({
+        ...payload,
+        user_id: user.id,
+      }).eq('id', editing.id))
     } else {
       ;({ error } = await supabase.from('vendor').insert(payload))
     }
@@ -116,7 +119,17 @@ export default function Vendors() {
       return alert(`Vendor masih memiliki ${v.total_job} job aktif. Pindahkan/hapus job dulu.`)
     }
     if (!confirm(`Hapus vendor "${v.nama}"?`)) return
-    await supabase.from('vendor').update({ deleted_at: new Date().toISOString() }).eq('id', v.id)
+    try {
+      const res = await fetch(`/api/delete-vendor?id=${v.id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) {
+        alert('Gagal hapus: ' + (data.error || 'Unknown error'))
+        return
+      }
+    } catch (e) {
+      alert('Gagal hapus: ' + (e instanceof Error ? e.message : 'Network error'))
+      return
+    }
     await loadData()
   }
 
