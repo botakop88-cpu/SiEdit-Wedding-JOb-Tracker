@@ -46,7 +46,7 @@ export default function Settings() {
   async function restore(table: string, id: string) {
     const { error } = await supabase
       .from(table)
-      .update({ deleted_at: null, user_id: user!.id })
+      .update({ deleted_at: null })
       .eq('id', id)
     if (error) {
       alert('Gagal pulihkan: ' + error.message)

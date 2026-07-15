@@ -132,7 +132,7 @@ export default function Jobs() {
     if (!confirm('Hapus job ini?')) return
     const { error } = await supabase
       .from('job')
-      .update({ deleted_at: new Date().toISOString(), user_id: user!.id })
+      .update({ deleted_at: new Date().toISOString() })
       .eq('id', id)
     if (error) {
       alert('Gagal hapus: ' + error.message)
@@ -149,21 +149,18 @@ export default function Jobs() {
       if (!confirm(`Hapus ${ids.length} job?`)) return
       ;({ error } = await supabase.from('job').update({
         deleted_at: new Date().toISOString(),
-        user_id: user!.id,
       }).in('id', ids))
     } else if (action === 'lunas') {
       ;({ error } = await supabase.from('job').update({
         status_bayar: 'Lunas',
         tanggal_lunas: todayStr(),
         updated_at: new Date().toISOString(),
-        user_id: user!.id,
       }).in('id', ids))
     } else {
       ;({ error } = await supabase.from('job').update({
         status_bayar: 'Belum Bayar',
         tanggal_lunas: null,
         updated_at: new Date().toISOString(),
-        user_id: user!.id,
       }).in('id', ids))
     }
     if (error) {

@@ -193,7 +193,7 @@ export default function Invoices() {
 
     const { error: invErr } = await supabase
       .from('invoice')
-      .update({ status_bayar: newStatus, user_id: user!.id })
+      .update({ status_bayar: newStatus })
       .eq('id', inv.id)
 
     if (invErr) return alert('Gagal update invoice: ' + invErr.message)
@@ -202,7 +202,6 @@ export default function Invoices() {
     const jobUpdate: Record<string, unknown> = {
       status_bayar: newStatus,
       updated_at: new Date().toISOString(),
-      user_id: user!.id,
     }
     if (newStatus === 'Lunas') jobUpdate.tanggal_lunas = todayStr()
     else jobUpdate.tanggal_lunas = null
@@ -222,7 +221,7 @@ export default function Invoices() {
     if (!confirm('Hapus invoice ini?')) return
     const { error } = await supabase
       .from('invoice')
-      .update({ deleted_at: new Date().toISOString(), user_id: user!.id })
+      .update({ deleted_at: new Date().toISOString() })
       .eq('id', id)
     if (error) {
       alert('Gagal hapus: ' + error.message)

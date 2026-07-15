@@ -98,10 +98,7 @@ export default function Vendors() {
 
     let error
     if (editing) {
-      ;({ error } = await supabase.from('vendor').update({
-        ...payload,
-        user_id: user.id,
-      }).eq('id', editing.id))
+      ;({ error } = await supabase.from('vendor').update(payload).eq('id', editing.id))
     } else {
       ;({ error } = await supabase.from('vendor').insert(payload))
     }
@@ -121,7 +118,7 @@ export default function Vendors() {
     if (!confirm(`Hapus vendor "${v.nama}"?`)) return
     const { error } = await supabase
       .from('vendor')
-      .update({ deleted_at: new Date().toISOString(), user_id: user!.id })
+      .update({ deleted_at: new Date().toISOString() })
       .eq('id', v.id)
     if (error) {
       alert('Gagal hapus: ' + error.message)
