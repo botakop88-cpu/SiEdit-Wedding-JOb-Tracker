@@ -130,6 +130,41 @@ CREATE POLICY invoice_delete ON invoice
 COMMENT ON COLUMN invoice.status_bayar IS 'Status pembayaran invoice: Belum Bayar / Lunas';
 
 -- ============================================================
+-- TABLE: vendor_price_item (custom products per vendor)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vendor_price_item (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  vendor_id UUID NOT NULL REFERENCES vendor(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  nama_produk TEXT NOT NULL,
+  harga INTEGER NOT NULL DEFAULT 0,
+  urutan INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ
+);
+
+ALTER TABLE vendor_price_item ALTER COLUMN user_id SET DEFAULT auth.uid();
+
+CREATE INDEX IF NOT EXISTS idx_vendor_price_item_vendor ON vendor_price_item(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_price_item_user ON vendor_price_item(user_id);
+
+ALTER TABLE vendor_price_item ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY vendor_price_item_select ON vendor_price_item
+  FOR SELECT USING (user_id = auth.uid());
+CREATE POLICY vendor_price_item_insert ON vendor_price_item
+  FOR INSERT WITH CHECK (user_id = auth.uid());
+CREATE POLICY vendor_price_item_update ON vendor_price_item
+  FOR UPDATE USING (user_id = auth.uid());
+CREATE POLICY vendor_price_item_delete ON vendor_price_item
+  FOR DELETE USING (user_id = auth.uid());
+
+DROP TRIGGER IF EXISTS update_vendor_price_item_updated_at ON vendor_price_item;
+CREATE TRIGGER update_vendor_price_item_updated_at
+  BEFORE UPDATE ON vendor_price_item
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
 -- NOTE for existing data (migration from v1.0 single-user):
 -- If you already have data without user_id set, run:
 --   UPDATE vendor SET user_id = '<your-user-uuid>' WHERE user_id IS NULL;

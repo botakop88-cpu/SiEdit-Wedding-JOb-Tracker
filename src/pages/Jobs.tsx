@@ -3,17 +3,17 @@ import { Plus, Search, Trash2, Pencil, X, CheckSquare, Square } from 'lucide-rea
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import type {
-  Job, Vendor, JenisEdit, StatusEdit, StatusBayar, StatusCetak, JobFilter,
+  Job, Vendor, VendorPriceItem, StatusEdit, StatusBayar, StatusCetak, JobFilter,
 } from '../lib/types'
 import {
-  JENIS_EDIT_OPTIONS, STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS,
+  STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS,
 } from '../lib/types'
 import { rupiah, formatDate, daysUntil, todayStr } from '../lib/utils'
 
 const EMPTY_FORM = {
   vendor_id: '',
   nama_project: '',
-  jenis_edit: 'Kolase Sudah Pilih' as JenisEdit,
+  jenis_edit: '',
   harga: 0,
   deadline: '',
   status_edit: 'Masuk' as StatusEdit,
@@ -26,6 +26,7 @@ export default function Jobs() {
   const { user } = useAuth()
   const [jobs, setJobs] = useState<Job[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
+  const [vendorPriceItems, setVendorPriceItems] = useState<VendorPriceItem[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<JobFilter>('Semua')
@@ -40,23 +41,28 @@ export default function Jobs() {
 
   async function loadData() {
     setLoading(true)
-    const [jRes, vRes] = await Promise.all([
+    const [jRes, vRes, piRes] = await Promise.all([
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('created_at', { ascending: false }),
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
+      supabase.from('vendor_price_item').select('*').order('urutan'),
     ])
     if (jRes.data) setJobs(jRes.data as Job[])
     if (vRes.data) setVendors(vRes.data as Vendor[])
+    if (piRes.data) setVendorPriceItems(piRes.data as VendorPriceItem[])
     setSelected(new Set())
     setLoading(false)
   }
 
+  // Get price items for a vendor
+  const priceItemsForVendor = (vendorId: string): VendorPriceItem[] => {
+    return vendorPriceItems.filter((p) => p.vendor_id === vendorId)
+  }
+
   // Auto-fill harga when vendor/jenis changes
-  function updateHarga(vendorId: string, jenis: JenisEdit) {
-    const v = vendors.find((x) => x.id === vendorId)
-    if (!v) return 0
-    if (jenis === 'Kolase Sudah Pilih') return v.harga_kolase_sudah_pilih
-    if (jenis === 'Kolase Belum Pilih') return v.harga_kolase_belum_pilih
-    return v.harga_edit_full
+  function updateHarga(vendorId: string, jenis: string) {
+    const items = priceItemsForVendor(vendorId)
+    const match = items.find((p) => p.nama_produk === jenis)
+    return match ? match.harga : 0
   }
 
   function openNew() {
@@ -84,10 +90,14 @@ export default function Jobs() {
   function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => {
       const next = { ...prev, [key]: value }
-      if (key === 'vendor_id' || key === 'jenis_edit') {
-        const vid = key === 'vendor_id' ? (value as string) : next.vendor_id
-        const jenis = key === 'jenis_edit' ? (value as JenisEdit) : next.jenis_edit
-        if (vid) next.harga = updateHarga(vid, jenis)
+      if (key === 'vendor_id') {
+        // Reset jenis & harga when vendor changes
+        next.jenis_edit = ''
+        next.harga = 0
+      } else if (key === 'jenis_edit') {
+        const vid = next.vendor_id
+        const jenis = value as string
+        if (vid && jenis) next.harga = updateHarga(vid, jenis)
       }
       return next
     })
@@ -225,6 +235,17 @@ export default function Jobs() {
     if (selected.size === filtered.length) setSelected(new Set())
     else setSelected(new Set(filtered.map((j) => j.id)))
   }
+
+  // Get jenis options for form
+  const jenisOptions = useMemo(() => {
+    if (!form.vendor_id) return []
+    const items = priceItemsForVendor(form.vendor_id)
+    // If editing old job and jenis_edit doesn't match any current item, include it as legacy option
+    if (editing && form.jenis_edit && !items.find((p) => p.nama_produk === form.jenis_edit)) {
+      return [{ nama_produk: form.jenis_edit, harga: form.harga }]
+    }
+    return items
+  }, [form.vendor_id, editing, form.jenis_edit, form.harga, vendorPriceItems])
 
   if (loading) {
     return (
@@ -403,14 +424,36 @@ export default function Jobs() {
               </Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Jenis Edit">
-                  <select value={form.jenis_edit} onChange={(e) => setField('jenis_edit', e.target.value as JenisEdit)} className={inputCls}>
-                    {JENIS_EDIT_OPTIONS.map((o) => <option key={o}>{o}</option>)}
-                  </select>
+                  {!form.vendor_id ? (
+                    <input disabled value="" placeholder="Pilih vendor dulu" className={`${inputCls} bg-slate-50`} />
+                  ) : jenisOptions.length === 0 ? (
+                    <input
+                      value={form.jenis_edit}
+                      onChange={(e) => setField('jenis_edit', e.target.value)}
+                      placeholder="Isi manual (vendor belum punya produk)"
+                      className={inputCls}
+                    />
+                  ) : (
+                    <select value={form.jenis_edit} onChange={(e) => setField('jenis_edit', e.target.value)} className={inputCls}>
+                      <option value="">Pilih jenis</option>
+                      {jenisOptions.map((o) => <option key={o.nama_produk} value={o.nama_produk}>{o.nama_produk}</option>)}
+                    </select>
+                  )}
                 </Field>
                 <Field label="Harga">
-                  <input type="number" min={0} value={form.harga} onChange={(e) => setField('harga', Number(e.target.value))} className={inputCls} />
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.harga}
+                    onChange={(e) => setField('harga', Number(e.target.value))}
+                    className={inputCls}
+                    disabled={!form.vendor_id || jenisOptions.length === 0}
+                  />
                 </Field>
               </div>
+              {form.vendor_id && jenisOptions.length === 0 && !editing && (
+                <p className="text-xs text-amber-600">Vendor ini belum punya daftar produk/harga. Isi Jenis Edit & Harga manual, atau tambahkan produk di halaman Vendor dulu.</p>
+              )}
               <Field label="Deadline">
                 <input type="date" value={form.deadline} onChange={(e) => setField('deadline', e.target.value)} className={inputCls} />
               </Field>

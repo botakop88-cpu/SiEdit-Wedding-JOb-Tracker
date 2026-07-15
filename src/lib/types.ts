@@ -5,6 +5,7 @@ export interface Vendor {
   user_id: string
   nama: string
   whatsapp: string | null
+  // deprecated, digantikan vendor_price_item — jangan dipakai untuk data baru
   harga_kolase_sudah_pilih: number
   harga_kolase_belum_pilih: number
   harga_edit_full: number
@@ -13,12 +14,23 @@ export interface Vendor {
   deleted_at: string | null
 }
 
+export interface VendorPriceItem {
+  id: string
+  vendor_id: string
+  user_id: string
+  nama_produk: string
+  harga: number
+  urutan: number
+  created_at: string
+  updated_at: string | null
+}
+
 export interface Job {
   id: string
   user_id: string
   vendor_id: string | null
   nama_project: string
-  jenis_edit: JenisEdit
+  jenis_edit: string // was union type, now dynamic based on vendor_price_item
   harga: number
   deadline: string | null
   status_edit: StatusEdit
@@ -57,16 +69,12 @@ export interface InvoiceItem {
 
 // ─── Enum types ──────────────────────────────────────────────────
 
-export type JenisEdit = 'Kolase Sudah Pilih' | 'Kolase Belum Pilih' | 'Edit Full'
+export type JenisEdit = string // was 'Kolase Sudah Pilih' | 'Kolase Belum Pilih' | 'Edit Full'; now dynamic from vendor_price_item
 export type StatusEdit = 'Masuk' | 'Sedang Edit' | 'Revisi' | 'Selesai' | 'Sudah Dikirim'
 export type StatusBayar = 'Belum Bayar' | 'Lunas'
 export type StatusCetak = 'Belum Cetak' | 'Sudah Cetak'
 
-export const JENIS_EDIT_OPTIONS: JenisEdit[] = [
-  'Kolase Sudah Pilih',
-  'Kolase Belum Pilih',
-  'Edit Full',
-]
+export const JENIS_EDIT_OPTIONS: JenisEdit[] = [] // deprecated — digantikan vendor_price_item per vendor
 
 export const STATUS_EDIT_OPTIONS: StatusEdit[] = [
   'Masuk',
