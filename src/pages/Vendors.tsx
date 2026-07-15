@@ -325,17 +325,17 @@ export default function Vendors() {
                         value={item.nama_produk}
                         onChange={(e) => updatePriceItem(idx, 'nama_produk', e.target.value)}
                         placeholder="Nama produk (contoh: Kolase 3x4)"
-                        className={`flex-1 ${inputCls}`}
+                        className={`flex-1 min-w-0 ${inputClsNoFull}`}
                       />
                       <input
                         type="number"
                         min={0}
                         value={item.harga}
-                        onChange={(e) => updatePriceItem(idx, 'harga', Number(e.target.value))}
+                        onChange={(e) => updatePriceItem(idx, 'harga', e.target.value === '' ? 0 : Number(e.target.value))}
                         placeholder="Harga"
-                        className={`w-28 ${inputCls}`}
+                        className={`w-24 shrink-0 ${inputClsNoFull}`}
                       />
-                      <button type="button" onClick={() => removePriceItem(idx)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                      <button type="button" onClick={() => removePriceItem(idx)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
@@ -371,3 +371,4 @@ export default function Vendors() {
 }
 
 const inputCls = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent'
+const inputClsNoFull = 'border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent'
