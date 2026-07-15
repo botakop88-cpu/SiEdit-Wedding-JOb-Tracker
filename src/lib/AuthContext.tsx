@@ -20,28 +20,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    console.log('[AuthContext] Init, isOAuthCallback:', isOAuthCallback)
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('[AuthContext] Event:', event, 'User:', session?.user?.email || null)
+      // Always update user
       setUser(session?.user ?? null)
 
       if (event === 'INITIAL_SESSION') {
-        // OAuth callback — PKCE exchange not done yet.
-        // Skip setLoading(false); wait for SIGNED_IN.
-        if (isOAuthCallback) {
-          console.log('[AuthContext] OAuth callback detected, waiting for SIGNED_IN...')
+        // INITIAL_SESSION with session → user already logged in
+        if (session) {
+          setLoading(false)
           return
         }
 
-        // Normal page load — session (or null) already resolved.
-        console.log('[AuthContext] Normal load, setting loading=false')
-        setLoading(false)
+        // INITIAL_SESSION with null could mean:
+        // 1) OAuth PKCE callback — exchange not done yet, wait for SIGNED_IN
+        // 2) Normal page load as anonymous user
+        if (!isOAuthCallback) {
+          setLoading(false)
+        }
+        // If OAuth callback: keep loading=true, SIGNED_IN will set loading=false
         return
       }
 
       // SIGNED_IN / SIGNED_OUT / TOKEN_REFRESHED
-      console.log('[AuthContext] Auth event resolved, setting loading=false')
       setLoading(false)
     })
 
