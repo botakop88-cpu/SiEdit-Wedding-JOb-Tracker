@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import { supabase } from '../lib/supabaseClient'
+import { supabase, isOAuthCallback } from '../lib/supabaseClient'
 import type { User, AuthError } from '@supabase/supabase-js'
 
 interface AuthContextValue {
@@ -20,24 +20,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Detect OAuth PKCE callback by checking URL hash
-    const hash = window.location.hash
-    const isOAuthCallback = hash.includes('access_token=') || hash.includes('code=')
+    console.log('[AuthContext] Init, isOAuthCallback:', isOAuthCallback)
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[AuthContext] Event:', event, 'User:', session?.user?.email || null)
       setUser(session?.user ?? null)
 
       if (event === 'INITIAL_SESSION') {
         // OAuth callback — PKCE exchange not done yet.
         // Skip setLoading(false); wait for SIGNED_IN.
-        if (isOAuthCallback) return
+        if (isOAuthCallback) {
+          console.log('[AuthContext] OAuth callback detected, waiting for SIGNED_IN...')
+          return
+        }
 
         // Normal page load — session (or null) already resolved.
+        console.log('[AuthContext] Normal load, setting loading=false')
         setLoading(false)
         return
       }
 
       // SIGNED_IN / SIGNED_OUT / TOKEN_REFRESHED
+      console.log('[AuthContext] Auth event resolved, setting loading=false')
       setLoading(false)
     })
 

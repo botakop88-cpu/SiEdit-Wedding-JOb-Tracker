@@ -10,4 +10,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
   )
 }
 
+// Check BEFORE createClient clears URL (hash or query)
+// Supabase v2 PKCE flow uses hash fragments: /dashboard#access_token=xxx&...
+// Older PKCE or implicit flow can use query params: /dashboard?code=xxx
+const url = new URL(window.location.href)
+const hashHasTokens = url.hash.includes('access_token=') || url.hash.includes('code=')
+const queryHasCode = url.searchParams.has('code') || url.searchParams.has('access_token')
+export const isOAuthCallback = hashHasTokens || queryHasCode
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
