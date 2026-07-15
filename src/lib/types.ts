@@ -43,6 +43,7 @@ export interface Invoice {
   total: number
   status_bayar: StatusBayar
   pdf_path: string | null
+  nomor: string | null // Invoice number (e.g., INV-0001)
   created_at: string
   deleted_at: string | null
 }

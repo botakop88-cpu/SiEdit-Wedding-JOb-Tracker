@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_vendor_deleted ON vendor(deleted_at);
 ALTER TABLE vendor ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY vendor_select ON vendor
-  FOR SELECT USING (user_id = auth.uid() AND deleted_at IS NULL);
+  FOR SELECT USING (user_id = auth.uid());
 CREATE POLICY vendor_insert ON vendor
   FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY vendor_update ON vendor
@@ -81,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_job_deleted ON job(deleted_at);
 ALTER TABLE job ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY job_select ON job
-  FOR SELECT USING (user_id = auth.uid() AND deleted_at IS NULL);
+  FOR SELECT USING (user_id = auth.uid());
 CREATE POLICY job_insert ON job
   FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY job_update ON job
@@ -119,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_invoice_deleted ON invoice(deleted_at);
 ALTER TABLE invoice ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY invoice_select ON invoice
-  FOR SELECT USING (user_id = auth.uid() AND deleted_at IS NULL);
+  FOR SELECT USING (user_id = auth.uid());
 CREATE POLICY invoice_insert ON invoice
   FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY invoice_update ON invoice

@@ -112,8 +112,17 @@ export default function Vendors() {
   }
 
   async function softDelete(v: VendorStats) {
-    if (v.total_job > 0) {
-      return alert(`Vendor masih memiliki ${v.total_job} job aktif. Pindahkan/hapus job dulu.`)
+    // Real-time count: cek job aktif untuk vendor ini (konsisten dengan loadData)
+    const { count, error: countErr } = await supabase
+      .from('job')
+      .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null)
+      .eq('vendor_id', v.id)
+    if (countErr) {
+      return alert('Gagal cek job vendor: ' + countErr.message)
+    }
+    if ((count ?? 0) > 0) {
+      return alert(`Vendor masih memiliki ${count} job aktif. Pindahkan/hapus job dulu.`)
     }
     if (!confirm(`Hapus vendor "${v.nama}"?`)) return
     const { error } = await supabase

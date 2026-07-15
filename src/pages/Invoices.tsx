@@ -104,12 +104,14 @@ export default function Invoices() {
       jenis: j.jenis_edit,
     }))
 
-    // Invoice number from count
+    // Generate invoice number: INV-XXXX (sequential per user)
     const { count } = await supabase
       .from('invoice')
       .select('*', { count: 'exact', head: true })
+      .eq('user_id', user!.id)
 
-    const invNumber = `INV-${String((count ?? 0) + 1).padStart(4, '0')}`
+    const seq = (count ?? 0) + 1
+    const invNumber = `INV-${String(seq).padStart(4, '0')}`
 
     const { error } = await supabase.from('invoice').insert({
       user_id: user!.id,
@@ -119,6 +121,7 @@ export default function Invoices() {
       items_json: JSON.stringify(items),
       total,
       status_bayar: 'Belum Bayar',
+      nomor: invNumber, // <-- simpan nomor invoice
     })
 
     if (error) {
@@ -233,12 +236,22 @@ export default function Invoices() {
 
   async function reprint(inv: Invoice) {
     const items: InvoiceItem[] = JSON.parse(inv.items_json)
-    // invoice number from DB counter
-    const { count } = await supabase
-      .from('invoice')
-      .select('*', { count: 'exact', head: true })
-      .lte('created_at', inv.created_at)
-    const number = `INV-${String((count ?? 1)).padStart(4, '0')}`
+    
+    let number: string
+    if (inv.nomor) {
+      // Kolom nomor sudah ada (invoice baru setelah migrasi)
+      number = inv.nomor
+    } else {
+      // Fallback untuk invoice lama yang dibuat sebelum kolom nomor ada
+      // Hitung nomor berdasarkan urutan created_at (sequential per user)
+      const { count } = await supabase
+        .from('invoice')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user!.id)
+        .lte('created_at', inv.created_at)
+      number = `INV-${String(count ?? 1).padStart(4, '0')}`
+    }
+    
     printInvoice(number, inv.vendor_nama, inv.tanggal, items, inv.total)
   }
 
