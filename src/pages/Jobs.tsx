@@ -188,6 +188,7 @@ export default function Jobs() {
     if (filter === 'Belum Bayar') list = list.filter((j) => j.status_bayar === 'Belum Bayar')
     else if (filter === 'Lunas') list = list.filter((j) => j.status_bayar === 'Lunas')
     else if (filter === 'Sedang Edit') list = list.filter((j) => j.status_edit === 'Sedang Edit')
+    else if (filter === 'Sudah Dikirim') list = list.filter((j) => j.status_cetak === 'Sudah Dikirim')
     else if (filter === 'Sudah Cetak') list = list.filter((j) => j.status_cetak === 'Sudah Cetak')
     else if (filter === 'Belum Cetak') list = list.filter((j) => j.status_cetak === 'Belum Cetak')
     else if (filter === 'Deadline ≤ 3 Hari') {
@@ -265,7 +266,7 @@ export default function Jobs() {
           onChange={(e) => setFilter(e.target.value as JobFilter)}
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
         >
-          {(['Semua', 'Belum Bayar', 'Lunas', 'Sedang Edit', 'Deadline ≤ 3 Hari', 'Sudah Cetak', 'Belum Cetak'] as JobFilter[]).map((f) => (
+          {(['Semua', 'Belum Bayar', 'Lunas', 'Sedang Edit', 'Deadline ≤ 3 Hari', 'Sudah Dikirim', 'Sudah Cetak', 'Belum Cetak'] as JobFilter[]).map((f) => (
             <option key={f} value={f}>{f}</option>
           ))}
         </select>
@@ -470,7 +471,6 @@ function badgeEdit(v: string) {
     'Sedang Edit': 'bg-blue-100 text-blue-700',
     Revisi: 'bg-orange-100 text-orange-700',
     Selesai: 'bg-emerald-100 text-emerald-700',
-    'Sudah Dikirim': 'bg-purple-100 text-purple-700',
   }
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[v] ?? 'bg-slate-100 text-slate-600'}`}>{v}</span>
 }
@@ -482,8 +482,12 @@ function badgeBayar(v: string) {
   )
 }
 function badgeCetak(v: string) {
+  const colors: Record<string, string> = {
+    'Sudah Dikirim': 'bg-purple-100 text-purple-700',
+    'Sudah Cetak': 'bg-indigo-100 text-indigo-700',
+  }
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${v === 'Sudah Cetak' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[v] ?? 'bg-slate-100 text-slate-500'}`}>
       {v}
     </span>
   )

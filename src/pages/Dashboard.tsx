@@ -58,7 +58,7 @@ export default function Dashboard() {
         .not('deadline', 'is', null)
         .gte('deadline', today)
         .lte('deadline', maxDeadline)
-        .not('status_edit', 'in', '("Selesai","Sudah Dikirim")')
+        .not('status_edit', 'in', '("Selesai")')
         .neq('status_bayar', 'Lunas')
         .order('deadline')
         .limit(10),

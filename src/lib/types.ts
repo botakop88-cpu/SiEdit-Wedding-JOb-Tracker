@@ -57,9 +57,9 @@ export interface InvoiceItem {
 // ─── Enum types ──────────────────────────────────────────────────
 
 export type JenisEdit = 'Kolase Sudah Pilih' | 'Kolase Belum Pilih' | 'Edit Full'
-export type StatusEdit = 'Masuk' | 'Sedang Edit' | 'Revisi' | 'Selesai' | 'Sudah Dikirim'
+export type StatusEdit = 'Masuk' | 'Sedang Edit' | 'Revisi' | 'Selesai'
 export type StatusBayar = 'Belum Bayar' | 'Lunas'
-export type StatusCetak = 'Belum Cetak' | 'Sudah Cetak'
+export type StatusCetak = 'Belum Cetak' | 'Sudah Dikirim' | 'Sudah Cetak'
 
 export const JENIS_EDIT_OPTIONS: JenisEdit[] = [
   'Kolase Sudah Pilih',
@@ -72,11 +72,10 @@ export const STATUS_EDIT_OPTIONS: StatusEdit[] = [
   'Sedang Edit',
   'Revisi',
   'Selesai',
-  'Sudah Dikirim',
 ]
 
 export const STATUS_BAYAR_OPTIONS: StatusBayar[] = ['Belum Bayar', 'Lunas']
-export const STATUS_CETAK_OPTIONS: StatusCetak[] = ['Belum Cetak', 'Sudah Cetak']
+export const STATUS_CETAK_OPTIONS: StatusCetak[] = ['Belum Cetak', 'Sudah Dikirim', 'Sudah Cetak']
 
 // ─── Filter helper ───────────────────────────────────────────────
 
@@ -86,5 +85,6 @@ export type JobFilter =
   | 'Lunas'
   | 'Sedang Edit'
   | 'Deadline ≤ 3 Hari'
+  | 'Sudah Dikirim'
   | 'Sudah Cetak'
   | 'Belum Cetak'
