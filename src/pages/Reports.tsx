@@ -33,11 +33,6 @@ export default function Reports() {
 
   const years = Array.from({ length: curYear - 2019 }, (_, i) => 2020 + i)
 
-  function shiftMonths(year: number, month: number, delta: number) {
-    const total = year * 12 + month + delta
-    return { year: Math.floor(total / 12), month: ((total % 12) + 12) % 12 }
-  }
-
   function dateStr(year: number, month: number) {
     return `${year}-${String(month + 1).padStart(2, '0')}`
   }
@@ -59,7 +54,6 @@ export default function Reports() {
   }
 
   const monthList = useMemo(() => allMonths(), [fromYear, fromMonth, toYear, toMonth])
-  const monthCount = monthList.length
 
   useEffect(() => { loadData() }, [fromYear, fromMonth, toYear, toMonth])
 
