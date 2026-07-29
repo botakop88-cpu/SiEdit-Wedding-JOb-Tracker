@@ -8,6 +8,7 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>
   signUp: (email: string, password: string) => Promise<{ error: AuthError | null }>
   signOut: () => Promise<void>
+  signInWithGoogle: () => Promise<{ error: AuthError | null }>
   resetPassword: (email: string) => Promise<{ error: AuthError | null }>
   updatePassword: (password: string) => Promise<{ error: AuthError | null }>
 }
@@ -19,13 +20,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    const hash = window.location.hash
+    const isOAuthCallback = hash.includes('access_token=') || hash.includes('code=')
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
-      setLoading(false)
+      if (!isOAuthCallback) setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null)
+      if (event === 'INITIAL_SESSION' && isOAuthCallback) return
+      setLoading(false)
     })
 
     return () => subscription.unsubscribe()
@@ -38,6 +44,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password })
+    return { error }
+  }
+
+  const signInWithGoogle = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}/dashboard` }
+    })
     return { error }
   }
 
@@ -58,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, resetPassword, updatePassword }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, signInWithGoogle, resetPassword, updatePassword }}>
       {children}
     </AuthContext.Provider>
   )
