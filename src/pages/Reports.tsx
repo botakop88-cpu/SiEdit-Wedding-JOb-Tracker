@@ -6,9 +6,15 @@ import { rupiah } from '../lib/utils'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
 
 interface RawJob {
+  nama_project: string
   harga: number
   tanggal_lunas: string | null
+  deadline: string | null
   jenis_edit: string
+  status_edit: string
+  status_bayar: string
+  status_cetak: string
+  catatan: string | null
   vendor: { nama: string } | null
 }
 
@@ -72,7 +78,7 @@ export default function Reports() {
     const [mainRes, prevRes] = await Promise.all([
       supabase
         .from('job')
-        .select('harga, tanggal_lunas, jenis_edit, vendor:vendor_id(nama)')
+        .select('nama_project, harga, tanggal_lunas, deadline, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
         .is('deleted_at', null)
         .eq('status_bayar', 'Lunas')
         .gte('tanggal_lunas', from)
@@ -173,65 +179,53 @@ export default function Reports() {
   }, [raw])
 
   // ─── Export CSV ────────────────────────────────────
-  function fmtRp(v: number) {
-    if (v === 0) return '-'
+  function fmtCSV(v: string | number | null | undefined) {
+    if (v === null || v === undefined || v === '') return '-'
+    return String(v)
+  }
+
+  function fmtHarga(v: number) {
     return 'Rp' + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
   }
 
-  function exportCSV() {
-    const period = `${monthList[0]?.label} — ${monthList[monthList.length - 1]?.label}`
-    const rows: string[] = []
+  function fmtDate(v: string | null | undefined) {
+    if (!v) return '-'
+    return v
+  }
 
-    rows.push('"LAPORAN PENGHASILAN SIEDIT"')
-    rows.push('"Periode",' + period)
-    rows.push('"Total Penghasilan",' + fmtRp(totalAll))
-    rows.push('"Total Job Lunas",' + totalJobs)
-    rows.push('"Jumlah Bulan",' + monthCount)
-    rows.push('"Rata-rata per Bulan",' + fmtRp(avgMonthVal))
-    rows.push('')
-
-    rows.push('"RINCIAN BULANAN"')
-    rows.push('Bulan,Job Lunas,Penghasilan,vs Sebelumnya')
-
-    for (let i = 0; i < monthly.length; i++) {
-      const d = monthly[i]
-      const mom = (() => {
-        if (i === 0) return '-'
-        const prev = monthly[i - 1].total
-        if (prev === 0) return d.total > 0 ? '+' : '-'
-        const diff = ((d.total - prev) / prev) * 100
-        return (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%'
-      })()
-      rows.push(`${d.label},${d.count},${fmtRp(d.total)},${mom}`)
+  function csvEscape(val: string): string {
+    if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+      return '"' + val.replace(/"/g, '""') + '"'
     }
+    return val
+  }
 
-    rows.push('')
-    rows.push('TOTAL,' + totalJobs + ',' + fmtRp(totalAll) + ',')
+  function dataExportCSV() {
+    const cols = ['Project','Vendor','Jenis Edit','Harga','Deadline','Status Edit','Status Bayar','Status Cetak','Tanggal Lunas','Catatan']
+    const header = cols.join(',')
 
-    if (dist.length > 0) {
-      rows.push('')
-      rows.push('"DISTRIBUSI PER JENIS EDIT"')
-      rows.push('Jenis Edit,Total,Persentase')
-      for (const d of dist) {
-        rows.push(`${d.label},${fmtRp(d.value)},"${d.pct.toFixed(1)}%"`)
-      }
-    }
+    const rows = raw.map((j) => {
+      const vals = [
+        csvEscape(j.nama_project),
+        csvEscape(j.vendor?.nama ?? '-'),
+        csvEscape(j.jenis_edit),
+        csvEscape(fmtHarga(j.harga)),
+        csvEscape(fmtDate(j.deadline)),
+        csvEscape(j.status_edit),
+        csvEscape(j.status_bayar),
+        csvEscape(j.status_cetak),
+        csvEscape(fmtDate(j.tanggal_lunas)),
+        csvEscape(fmtCSV(j.catatan)),
+      ]
+      return vals.join(',')
+    })
 
-    if (topVendors.length > 0) {
-      rows.push('')
-      rows.push('"VENDOR TERATAS"')
-      rows.push('Vendor,Total')
-      for (const v of topVendors) {
-        rows.push(`${v.name},${fmtRp(v.value)}`)
-      }
-    }
-
-    const csv = '\uFEFF' + rows.join('\r\n')
+    const csv = '\uFEFF' + [header, ...rows].join('\r\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `laporan-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.csv`
+    a.download = `data-lunas-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -256,7 +250,7 @@ export default function Reports() {
           <h1 className="text-2xl font-bold text-slate-800">Laporan Penghasilan</h1>
         </div>
         <button
-          onClick={exportCSV}
+          onClick={dataExportCSV}
           disabled={totalAll === 0}
           className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-rose-600 border border-slate-300 hover:border-rose-300 rounded-lg px-3 py-1.5 font-medium transition-colors disabled:opacity-40"
         >
