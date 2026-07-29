@@ -483,8 +483,8 @@ function badgeBayar(v: string) {
 }
 function badgeCetak(v: string) {
   const colors: Record<string, string> = {
-    'Sudah Dikirim': 'bg-purple-100 text-purple-700',
-    'Sudah Cetak': 'bg-indigo-100 text-indigo-700',
+    'Sudah Dikirim': 'bg-blue-100 text-blue-700',
+    'Sudah Cetak': 'bg-emerald-100 text-emerald-700',
   }
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[v] ?? 'bg-slate-100 text-slate-500'}`}>
