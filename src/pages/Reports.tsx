@@ -174,14 +174,59 @@ export default function Reports() {
 
   // ─── Export CSV ────────────────────────────────────
   function exportCSV() {
-    const header = 'Bulan,Job Lunas,Penghasilan'
-    const rows = monthly.map((d) => `${d.label},${d.count},${d.total}`)
-    const csv = [header, ...rows].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
+    const period = `${monthList[0]?.label} — ${monthList[monthList.length - 1]?.label}`
+    const rows: string[] = []
+
+    rows.push('"Laporan Penghasilan SiEdit"')
+    rows.push(`"Periode","${period}"`)
+    rows.push(`"Total Penghasilan","${rupiah(totalAll)}"`)
+    rows.push(`"Total Job Lunas","${totalJobs}"`)
+    rows.push(`"Jumlah Bulan","${monthCount}"`)
+    rows.push(`"Rata-rata per Bulan","${rupiah(avgMonthVal)}"`)
+    rows.push('')
+
+    rows.push('"Rincian Bulanan"')
+    rows.push('"Bulan","Job Lunas","Penghasilan","vs Sebelumnya"')
+
+    for (let i = 0; i < monthly.length; i++) {
+      const d = monthly[i]
+      const mom = (() => {
+        if (i === 0) return '-'
+        const prev = monthly[i - 1].total
+        if (prev === 0) return d.total > 0 ? '+' : '-'
+        const diff = ((d.total - prev) / prev) * 100
+        return `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`
+      })()
+      rows.push(`"${d.label}","${d.count}","${d.total}","${mom}"`)
+    }
+
+    rows.push('')
+    rows.push(`"TOTAL","${totalJobs}","${totalAll}",""`)
+
+    if (dist.length > 0) {
+      rows.push('')
+      rows.push('"Distribusi per Jenis Edit"')
+      rows.push('"Jenis Edit","Total","Persentase"')
+      for (const d of dist) {
+        rows.push(`"${d.label}","${d.value}","${d.pct.toFixed(1)}%"`)
+      }
+    }
+
+    if (topVendors.length > 0) {
+      rows.push('')
+      rows.push('"Vendor Teratas"')
+      rows.push('"Vendor","Total"')
+      for (const v of topVendors) {
+        rows.push(`"${v.name}","${v.value}"`)
+      }
+    }
+
+    const csv = rows.join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `laporan-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.csv`
+    a.download = `laporan-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
