@@ -1,3 +1,4 @@
 {
+  "rootDirectory": "siedit-web",
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }
