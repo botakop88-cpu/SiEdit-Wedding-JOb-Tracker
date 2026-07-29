@@ -12,11 +12,6 @@ interface RawJob {
   vendor: { nama: string } | null
 }
 
-interface MonthData {
-  year: number; month: number; label: string
-  count: number; total: number
-}
-
 export default function Reports() {
   const now = new Date()
   const curMonth = now.getMonth()
@@ -156,11 +151,6 @@ export default function Reports() {
     'Edit Full': 'bg-blue-500',
   }
 
-  const conicStops = dist.map((d) => {
-    const color = distColors[d.label] ?? '#94a3b8'
-    return `${color} 0% ${d.pct}%`
-  }).join(', ')
-  // Normalize conic-gradient stops
   let cumulative = 0
   const normalizedStops = dist.map((d) => {
     const color = distColors[d.label] ?? '#94a3b8'
