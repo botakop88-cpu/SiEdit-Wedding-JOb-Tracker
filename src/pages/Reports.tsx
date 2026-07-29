@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { BarChart3, TrendingUp, Award, Briefcase, Calendar, Download } from 'lucide-react'
+import { BarChart3, Download } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { rupiah } from '../lib/utils'
 
@@ -28,7 +28,6 @@ export default function Reports() {
   const [toMonth, setToMonth] = useState(curMonth)
   const [toYear, setToYear] = useState(curYear)
   const [raw, setRaw] = useState<RawJob[]>([])
-  const [prevTotal, setPrevTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -72,26 +71,14 @@ export default function Reports() {
     const to = monthEnd(toYear, toMonth)
 
     // Prev period: same length, ending month before current start
-    const prevEnd = shiftMonths(fromYear, fromMonth, -1)
-    const prevStart = shiftMonths(fromYear, fromMonth, -monthCount)
-
-    const [mainRes, prevRes] = await Promise.all([
-      supabase
-        .from('job')
-        .select('nama_project, harga, tanggal_lunas, deadline, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
-        .is('deleted_at', null)
-        .eq('status_bayar', 'Lunas')
-        .gte('tanggal_lunas', from)
-        .lte('tanggal_lunas', to)
-        .order('tanggal_lunas'),
-      supabase
-        .from('job')
-        .select('harga')
-        .is('deleted_at', null)
-        .eq('status_bayar', 'Lunas')
-        .gte('tanggal_lunas', dateStr(prevStart.year, prevStart.month) + '-01')
-        .lte('tanggal_lunas', monthEnd(prevEnd.year, prevEnd.month)),
-    ])
+    const mainRes = await supabase
+      .from('job')
+      .select('nama_project, harga, tanggal_lunas, deadline, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
+      .is('deleted_at', null)
+      .eq('status_bayar', 'Lunas')
+      .gte('tanggal_lunas', from)
+      .lte('tanggal_lunas', to)
+      .order('tanggal_lunas')
 
     if (mainRes.error) {
       setError(mainRes.error.message)
@@ -100,9 +87,6 @@ export default function Reports() {
     }
 
     setRaw((mainRes.data ?? []) as unknown as RawJob[])
-    setPrevTotal(
-      (prevRes.data ?? []).reduce((s: number, j: { harga: number }) => s + j.harga, 0)
-    )
     setLoading(false)
   }
 
@@ -125,14 +109,7 @@ export default function Reports() {
 
   const maxTotal = Math.max(...monthly.map((d) => d.total), 1)
   const totalAll = monthly.reduce((s, d) => s + d.total, 0)
-  const activeMonths = monthly.filter((d) => d.count > 0).length
-  const avgMonthVal = activeMonths > 0 ? Math.round(totalAll / activeMonths) : 0
-  const best = monthly.reduce((a, b) => (a.total >= b.total ? a : b), monthly[0])
   const totalJobs = monthly.reduce((s, d) => s + d.count, 0)
-
-  const pctChange = prevTotal > 0
-    ? ((totalAll - prevTotal) / prevTotal * 100).toFixed(1)
-    : null
 
   // ─── Distribusi per jenis_edit ──────────────────────
   const dist = useMemo(() => {
@@ -146,24 +123,7 @@ export default function Reports() {
       .sort((a, b) => b.value - a.value)
   }, [raw])
 
-  const distColors: Record<string, string> = {
-    'Kolase Sudah Pilih': '#f59e0b',
-    'Kolase Belum Pilih': '#10b981',
-    'Edit Full': '#3b82f6',
-  }
-  const distBgColors: Record<string, string> = {
-    'Kolase Sudah Pilih': 'bg-amber-500',
-    'Kolase Belum Pilih': 'bg-emerald-500',
-    'Edit Full': 'bg-blue-500',
-  }
 
-  let cumulative = 0
-  const normalizedStops = dist.map((d) => {
-    const color = distColors[d.label] ?? '#94a3b8'
-    const start = cumulative
-    cumulative += d.pct
-    return `${color} ${start}% ${cumulative}%`
-  }).join(', ')
 
   // ─── Top Vendors ────────────────────────────────────
   const topVendors = useMemo(() => {
@@ -230,16 +190,7 @@ export default function Reports() {
     URL.revokeObjectURL(url)
   }
 
-  // ─── MoM helper ─────────────────────────────────────
-  function momChange(i: number): { pct: string; up: boolean } | null {
-    if (i === 0) return null
-    const prev = monthly[i - 1].total
-    if (prev === 0) return monthly[i].total > 0 ? null : null
-    const diff = ((monthly[i].total - prev) / prev) * 100
-    return { pct: `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`, up: diff >= 0 }
-  }
 
-  const yLabels = [0, 25, 50, 75, 100].map((pct) => Math.round((maxTotal * pct) / 100))
 
   const hasData = totalAll > 0
 
