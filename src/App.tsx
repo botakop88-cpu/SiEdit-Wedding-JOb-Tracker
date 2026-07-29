@@ -14,6 +14,7 @@ const Jobs = lazy(() => import('./pages/Jobs'))
 const Vendors = lazy(() => import('./pages/Vendors'))
 const Invoices = lazy(() => import('./pages/Invoices'))
 const Settings = lazy(() => import('./pages/Settings'))
+const Reports = lazy(() => import('./pages/Reports'))
 
 function LoadingFallback() {
   return (
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/vendors" element={<Suspense fallback={<LoadingFallback />}><Vendors /></Suspense>} />
               <Route path="/invoices" element={<Suspense fallback={<LoadingFallback />}><Invoices /></Suspense>} />
               <Route path="/settings" element={<Suspense fallback={<LoadingFallback />}><Settings /></Suspense>} />
+              <Route path="/reports" element={<Suspense fallback={<LoadingFallback />}><Reports /></Suspense>} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
