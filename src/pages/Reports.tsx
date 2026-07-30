@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { BarChart3, Download } from 'lucide-react'
+import { BarChart3, TrendingUp, Award, Briefcase, Calendar, Download } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { rupiah } from '../lib/utils'
 
@@ -28,6 +28,7 @@ export default function Reports() {
   const [toMonth, setToMonth] = useState(curMonth)
   const [toYear, setToYear] = useState(curYear)
   const [raw, setRaw] = useState<RawJob[]>([])
+  const [prevTotal, setPrevTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -54,6 +55,7 @@ export default function Reports() {
   }
 
   const monthList = useMemo(() => allMonths(), [fromYear, fromMonth, toYear, toMonth])
+  const monthCount = monthList.length
 
   useEffect(() => { loadData() }, [fromYear, fromMonth, toYear, toMonth])
 
@@ -64,15 +66,28 @@ export default function Reports() {
     const from = dateStr(fromYear, fromMonth) + '-01'
     const to = monthEnd(toYear, toMonth)
 
-    // Prev period: same length, ending month before current start
-    const mainRes = await supabase
-      .from('job')
-      .select('nama_project, harga, tanggal_lunas, deadline, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
-      .is('deleted_at', null)
-      .eq('status_bayar', 'Lunas')
-      .gte('tanggal_lunas', from)
-      .lte('tanggal_lunas', to)
-      .order('tanggal_lunas')
+    const prevEnd = { year: fromYear, month: fromMonth - 1 }
+    if (prevEnd.month < 0) { prevEnd.month = 11; prevEnd.year-- }
+    const prevStart = { year: prevEnd.year, month: prevEnd.month - (monthCount - 1) }
+    if (prevStart.month < 0) { prevStart.month += 12; prevStart.year-- }
+
+    const [mainRes, prevRes] = await Promise.all([
+      supabase
+        .from('job')
+        .select('nama_project, harga, tanggal_lunas, deadline, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
+        .is('deleted_at', null)
+        .eq('status_bayar', 'Lunas')
+        .gte('tanggal_lunas', from)
+        .lte('tanggal_lunas', to)
+        .order('tanggal_lunas'),
+      supabase
+        .from('job')
+        .select('harga')
+        .is('deleted_at', null)
+        .eq('status_bayar', 'Lunas')
+        .gte('tanggal_lunas', dateStr(prevStart.year, prevStart.month) + '-01')
+        .lte('tanggal_lunas', monthEnd(prevEnd.year, prevEnd.month)),
+    ])
 
     if (mainRes.error) {
       setError(mainRes.error.message)
@@ -81,6 +96,9 @@ export default function Reports() {
     }
 
     setRaw((mainRes.data ?? []) as unknown as RawJob[])
+    setPrevTotal(
+      (prevRes.data ?? []).reduce((s: number, j: { harga: number }) => s + j.harga, 0)
+    )
     setLoading(false)
   }
 
@@ -103,7 +121,14 @@ export default function Reports() {
 
   const maxTotal = Math.max(...monthly.map((d) => d.total), 1)
   const totalAll = monthly.reduce((s, d) => s + d.total, 0)
+  const activeMonths = monthly.filter((d) => d.count > 0).length
+  const avgMonthVal = activeMonths > 0 ? Math.round(totalAll / activeMonths) : 0
+  const best = monthly.reduce((a, b) => (a.total >= b.total ? a : b), monthly[0])
   const totalJobs = monthly.reduce((s, d) => s + d.count, 0)
+
+  const pctChange = prevTotal > 0
+    ? ((totalAll - prevTotal) / prevTotal * 100).toFixed(1)
+    : null
 
   // ─── Distribusi per jenis_edit ──────────────────────
   const dist = useMemo(() => {
@@ -117,7 +142,24 @@ export default function Reports() {
       .sort((a, b) => b.value - a.value)
   }, [raw])
 
+  const distColors: Record<string, string> = {
+    'Kolase Sudah Pilih': '#f59e0b',
+    'Kolase Belum Pilih': '#10b981',
+    'Edit Full': '#3b82f6',
+  }
+  const distBgColors: Record<string, string> = {
+    'Kolase Sudah Pilih': 'bg-amber-500',
+    'Kolase Belum Pilih': 'bg-emerald-500',
+    'Edit Full': 'bg-blue-500',
+  }
 
+  let cumulative = 0
+  const normalizedStops = dist.map((d) => {
+    const color = distColors[d.label] ?? '#94a3b8'
+    const start = cumulative
+    cumulative += d.pct
+    return `${color} ${start}% ${cumulative}%`
+  }).join(', ')
 
   // ─── Top Vendors ────────────────────────────────────
   const topVendors = useMemo(() => {
@@ -184,14 +226,21 @@ export default function Reports() {
     URL.revokeObjectURL(url)
   }
 
-
+  // ─── MoM helper ─────────────────────────────────────
+  function momChange(i: number): { pct: string; up: boolean } | null {
+    if (i === 0) return null
+    const prev = monthly[i - 1].total
+    if (prev === 0) return monthly[i].total > 0 ? null : null
+    const diff = ((monthly[i].total - prev) / prev) * 100
+    return { pct: `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`, up: diff >= 0 }
+  }
 
   const hasData = totalAll > 0
 
   return (
     <div className="p-4 md:p-8 max-w-3xl mx-auto space-y-5">
       {/* ── Filter ─────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
         <div className="flex flex-wrap items-center gap-2">
           <select value={fromMonth} onChange={(e) => setFromMonth(Number(e.target.value))}
             className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
@@ -224,7 +273,7 @@ export default function Reports() {
           <div className="animate-spin rounded-full h-8 w-8 border-3 border-rose-500 border-t-transparent" />
         </div>
       ) : !hasData ? (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-12 text-center">
+        <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-12 text-center">
           <BarChart3 className="w-10 h-10 text-slate-200 mx-auto mb-3" />
           <p className="text-slate-500 text-sm">Belum ada penghasilan di periode ini.</p>
         </div>
@@ -241,6 +290,43 @@ export default function Reports() {
               <p className="flex items-center gap-2"><span className="w-5">💰</span> Penghasilan : <strong className="text-rose-600">{rupiah(totalAll)}</strong></p>
               <p className="flex items-center gap-2"><span className="w-5">✅</span> Job Lunas   : <strong>{totalJobs}</strong></p>
               <p className="flex items-center gap-2"><span className="w-5">📅</span> Periode     : {monthList[0]?.label} — {monthList[monthList.length - 1]?.label}</p>
+              {pctChange !== null && (
+                <p className="flex items-center gap-2 text-xs text-slate-400 ml-7">
+                  <span>{Number(pctChange) >= 0 ? '↑' : '↓'} {Math.abs(Number(pctChange))}% dari periode sebelumnya</span>
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* ── KPI Cards ───────────────────────── */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
+                <TrendingUp className="w-3.5 h-3.5 text-emerald-500" /> Rata-rata
+              </div>
+              <p className="text-lg font-bold text-slate-800">{rupiah(avgMonthVal)}</p>
+              <p className="text-xs text-slate-400">per bulan aktif</p>
+            </div>
+            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
+                <Award className="w-3.5 h-3.5 text-amber-500" /> Tertinggi
+              </div>
+              <p className="text-lg font-bold text-slate-800 truncate">{best?.label ?? '-'}</p>
+              <p className="text-xs text-slate-400">{best?.total ? rupiah(best.total) : ''}</p>
+            </div>
+            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
+                <Briefcase className="w-3.5 h-3.5 text-blue-500" /> Job Lunas
+              </div>
+              <p className="text-lg font-bold text-slate-800">{totalJobs}</p>
+              <p className="text-xs text-slate-400">{monthCount > 0 ? `${(totalJobs / monthCount).toFixed(1)}/bulan` : ''}</p>
+            </div>
+            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
+                <Calendar className="w-3.5 h-3.5 text-rose-500" /> Bulan Aktif
+              </div>
+              <p className="text-lg font-bold text-slate-800">{activeMonths} / {monthCount}</p>
+              <p className="text-xs text-slate-400">{monthCount > 0 ? `${Math.round((activeMonths / monthCount) * 100)}%` : ''}</p>
             </div>
           </div>
 
@@ -266,8 +352,34 @@ export default function Reports() {
             </div>
           </div>
 
-          {/* ── 2-Column: Top Vendors + Jenis Edit ──── */}
+          {/* ── 2-Column: Donut + Top Vendors ──────── */}
           <div className="grid md:grid-cols-2 gap-4">
+            {/* Donut */}
+            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">📁 Distribusi per Jenis Edit</h3>
+              {dist.length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-6">Tidak ada data</p>
+              ) : (
+                <div className="flex items-center gap-4">
+                  <div
+                    className="w-24 h-24 rounded-full shrink-0"
+                    style={{
+                      background: `conic-gradient(${normalizedStops})`,
+                    }}
+                  />
+                  <div className="flex-1 space-y-1.5 min-w-0">
+                    {dist.map((d) => (
+                      <div key={d.label} className="flex items-center gap-2 text-sm">
+                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${distBgColors[d.label] ?? 'bg-slate-400'}`} />
+                        <span className="text-slate-600 truncate flex-1">{d.label}</span>
+                        <span className="font-medium text-slate-800">{d.pct.toFixed(0)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Top Vendors */}
             <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
               <h3 className="text-sm font-semibold text-slate-700 mb-3">🏆 Top Vendor</h3>
@@ -292,24 +404,78 @@ export default function Reports() {
                 </div>
               )}
             </div>
-
-            {/* Jenis Edit */}
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
-              <h3 className="text-sm font-semibold text-slate-700 mb-3">📁 Jenis Edit</h3>
-              {dist.length === 0 ? (
-                <p className="text-sm text-slate-400">Tidak ada data</p>
-              ) : (
-                <div className="space-y-2">
-                  {dist.map((d) => (
-                    <div key={d.label} className="flex items-center justify-between text-sm">
-                      <span className="text-slate-600">• {d.label}</span>
-                      <span className="font-medium text-slate-800">({d.pct.toFixed(0)}%)</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
+
+          {/* ── Monthly Table ────────────────────── */}
+          {monthly.length > 0 && (
+            <div className="border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden">
+              <div className="px-5 py-3 border-b border-slate-200">
+                <h3 className="text-sm font-semibold text-slate-700">📋 Rincian Bulanan</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
+                      <th className="px-5 py-3 font-medium">Bulan</th>
+                      <th className="px-4 py-3 font-medium text-right">Job</th>
+                      <th className="px-4 py-3 font-medium text-right">Pendapatan</th>
+                      <th className="px-4 py-3 font-medium text-right">vs Sebelumnya</th>
+                      <th className="px-4 py-3 font-medium" style={{ width: '30%' }}>Indikator</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {monthly.map((d, i) => {
+                      const mom = momChange(i)
+                      const pct = maxTotal > 0 ? (d.total / maxTotal) * 100 : 0
+                      return (
+                        <tr key={d.label} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-5 py-3 font-medium text-slate-700">{d.label}</td>
+                          <td className="px-4 py-3 text-right text-slate-600">{d.count}</td>
+                          <td className="px-4 py-3 text-right font-medium text-slate-800">
+                            {d.total > 0 ? rupiah(d.total) : <span className="text-slate-300">Rp 0</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {mom ? (
+                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                                mom.up ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                              }`}>
+                                {mom.pct}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  d.total === 0
+                                    ? 'bg-slate-200'
+                                    : d.total === best?.total && d.total > 0
+                                      ? 'bg-gradient-to-r from-rose-500 to-rose-600'
+                                      : 'bg-gradient-to-r from-rose-300 to-rose-500'
+                                }`}
+                                style={{ width: `${Math.max(pct, d.total === 0 ? 2 : 4)}%` }}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 border-t-2 border-slate-200">
+                      <td className="px-5 py-3 text-sm font-bold text-slate-800">TOTAL</td>
+                      <td className="px-4 py-3 text-right text-sm font-bold text-slate-800">{totalJobs}</td>
+                      <td className="px-4 py-3 text-right text-sm font-bold text-slate-800">{rupiah(totalAll)}</td>
+                      <td className="px-4 py-3" />
+                      <td className="px-4 py-3" />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
