@@ -24,6 +24,7 @@ const EMPTY_FORM = {
 
 export default function Jobs() {
   const { user } = useAuth()
+
   const [jobs, setJobs] = useState<Job[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [loading, setLoading] = useState(true)

@@ -98,10 +98,7 @@ export default function Vendors() {
 
     let error
     if (editing) {
-      ;({ error } = await supabase.from('vendor').update({
-        ...payload,
-        user_id: user.id,
-      }).eq('id', editing.id))
+      ;({ error } = await supabase.from('vendor').update(payload).eq('id', editing.id))
     } else {
       ;({ error } = await supabase.from('vendor').insert(payload))
     }

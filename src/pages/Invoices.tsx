@@ -7,6 +7,7 @@ import { rupiah, formatDate, todayStr } from '../lib/utils'
 
 export default function Invoices() {
   const { user } = useAuth()
+
   const [tab, setTab] = useState<'buat' | 'riwayat'>('buat')
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [selectedVendor, setSelectedVendor] = useState('')
