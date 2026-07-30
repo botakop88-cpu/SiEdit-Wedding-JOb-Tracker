@@ -300,28 +300,32 @@ export default function Reports() {
 
           {/* ── KPI Cards ───────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
+              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-emerald-50" />
               <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
                 <TrendingUp className="w-3.5 h-3.5 text-emerald-500" /> Rata-rata
               </div>
               <p className="text-lg font-bold text-slate-800">{rupiah(avgMonthVal)}</p>
               <p className="text-xs text-slate-400">per bulan aktif</p>
             </div>
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
+              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-amber-50" />
               <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
                 <Award className="w-3.5 h-3.5 text-amber-500" /> Tertinggi
               </div>
               <p className="text-lg font-bold text-slate-800 truncate">{best?.label ?? '-'}</p>
               <p className="text-xs text-slate-400">{best?.total ? rupiah(best.total) : ''}</p>
             </div>
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
+              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-blue-50" />
               <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
                 <Briefcase className="w-3.5 h-3.5 text-blue-500" /> Job Lunas
               </div>
               <p className="text-lg font-bold text-slate-800">{totalJobs}</p>
               <p className="text-xs text-slate-400">{monthCount > 0 ? `${(totalJobs / monthCount).toFixed(1)}/bulan` : ''}</p>
             </div>
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
+              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-rose-50" />
               <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
                 <Calendar className="w-3.5 h-3.5 text-rose-500" /> Bulan Aktif
               </div>
@@ -332,24 +336,68 @@ export default function Reports() {
 
           {/* ── Bar Chart ───────────────────────── */}
           <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-3">📊 Grafik Pendapatan Bulanan</h3>
-            <div className="space-y-1.5">
-              {[...monthly].reverse().map((d) => {
-                const pct = maxTotal > 0 ? (d.total / maxTotal) * 100 : 0
-                return (
-                  <div key={d.label} className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500 w-20 shrink-0 text-right">{d.label}</span>
-                    <div className="flex-1 h-5 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-rose-400 transition-all duration-500"
-                        style={{ width: `${Math.max(pct, d.total === 0 ? 0 : 1)}%` }}
-                      />
-                    </div>
-                    <span className="text-xs font-medium text-slate-700 w-24 shrink-0 text-right">{rupiah(d.total)}</span>
-                  </div>
-                )
-              })}
+            <h3 className="text-sm font-semibold text-slate-700 mb-4">📊 Grafik Pendapatan Bulanan</h3>
+            <div className="flex gap-2">
+              <div className="flex flex-col justify-between text-xs text-slate-400 pr-2 shrink-0" style={{ height: 200 }}>
+                {[0, 25, 50, 75, 100].reverse().map((pct) => {
+                  const v = Math.round((maxTotal * pct) / 100)
+                  return (
+                    <span key={pct} className="leading-none">
+                      {v >= 1_000_000 ? `Rp${(v / 1_000_000).toFixed(1)}jt` : v >= 1_000 ? `Rp${(v / 1_000).toFixed(0)}rb` : `Rp${v}`}
+                    </span>
+                  )
+                })}
+              </div>
+              <div className="flex-1 relative" style={{ height: 200 }}>
+                <div className="absolute inset-0 flex flex-col justify-between">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div key={i} className="border-t border-dashed border-slate-200" style={{ height: 0 }} />
+                  ))}
+                </div>
+                <div className="absolute inset-0 flex items-end gap-1">
+                  {monthly.map((d) => {
+                    const pct = maxTotal > 0 ? (d.total / maxTotal) * 100 : 0
+                    const isBest = d.total === best?.total && d.total > 0
+                    return (
+                      <div key={d.label} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] text-slate-500 font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-sm z-10">
+                          {rupiah(d.total)}
+                        </div>
+                        <div
+                          className={`w-full max-w-[36px] rounded-t transition-all duration-500 ease-out ${
+                            d.total === 0
+                              ? 'bg-slate-100'
+                              : isBest
+                                ? 'bg-gradient-to-t from-rose-600 via-rose-400 to-rose-300'
+                                : 'bg-gradient-to-t from-rose-400 to-rose-200'
+                          }`}
+                          style={{
+                            height: `${Math.max(pct, d.total === 0 ? 2 : 4)}%`,
+                            animation: 'growUp 0.6s ease-out',
+                          }}
+                        />
+                        {isBest && d.total > 0 && (
+                          <span className="text-[9px] text-rose-500 font-bold mt-0.5">★</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
+            <div className="flex ml-8 mt-1.5">
+              {monthly.map((d) => (
+                <div key={d.label} className="flex-1 text-center text-[10px] text-slate-400 truncate">
+                  {d.label.split(' ')[0]}
+                </div>
+              ))}
+            </div>
+            <style>{`
+              @keyframes growUp {
+                from { transform: scaleY(0); }
+                to { transform: scaleY(1); }
+              }
+            `}</style>
           </div>
 
           {/* ── 2-Column: Donut + Top Vendors ──────── */}
@@ -360,19 +408,34 @@ export default function Reports() {
               {dist.length === 0 ? (
                 <p className="text-sm text-slate-400 text-center py-6">Tidak ada data</p>
               ) : (
-                <div className="flex items-center gap-4">
-                  <div
-                    className="w-24 h-24 rounded-full shrink-0"
-                    style={{
-                      background: `conic-gradient(${normalizedStops})`,
-                    }}
-                  />
-                  <div className="flex-1 space-y-1.5 min-w-0">
+                <div className="flex flex-col items-center gap-4">
+                  <div className="relative w-28 h-28">
+                    <div
+                      className="w-28 h-28 rounded-full"
+                      style={{ background: `conic-gradient(${normalizedStops})` }}
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center">
+                        <span className="text-lg font-bold text-slate-600">{totalJobs}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full space-y-2">
                     {dist.map((d) => (
-                      <div key={d.label} className="flex items-center gap-2 text-sm">
-                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${distBgColors[d.label] ?? 'bg-slate-400'}`} />
-                        <span className="text-slate-600 truncate flex-1">{d.label}</span>
-                        <span className="font-medium text-slate-800">{d.pct.toFixed(0)}%</span>
+                      <div key={d.label}>
+                        <div className="flex items-center justify-between text-sm mb-0.5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${distBgColors[d.label] ?? 'bg-slate-400'}`} />
+                            <span className="text-slate-600 truncate">{d.label}</span>
+                          </div>
+                          <span className="font-medium text-slate-800 shrink-0 ml-2">{d.pct.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${distBgColors[d.label] ?? 'bg-slate-400'}`}
+                            style={{ width: `${d.pct}%` }}
+                          />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -386,21 +449,32 @@ export default function Reports() {
               {topVendors.length === 0 ? (
                 <p className="text-sm text-slate-400">Tidak ada data</p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {topVendors.map((v, i) => {
                     const pct = (v.value / totalAll) * 100
                     return (
                       <div key={v.name}>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-slate-600">{i + 1}. {v.name}</span>
-                          <span className="font-medium text-slate-800">{rupiah(v.value)}</span>
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 ${
+                              i === 0 ? 'bg-amber-400' : i === 1 ? 'bg-slate-400' : i === 2 ? 'bg-amber-700' : 'bg-slate-300'
+                            }`}>{i + 1}</span>
+                            <span className="text-slate-700 truncate font-medium">{v.name}</span>
+                          </div>
+                          <span className="text-slate-800 font-medium shrink-0 ml-2">{rupiah(v.value)}</span>
                         </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mt-0.5">
-                          <div className="h-full bg-rose-300 rounded-full" style={{ width: `${pct}%` }} />
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-rose-300 to-rose-500 transition-all duration-500"
+                            style={{ width: `${pct}%` }}
+                          />
                         </div>
                       </div>
                     )
                   })}
+                  <div className="text-[10px] text-slate-400 text-right pt-0.5">
+                    Dari {rupiah(totalAll)} total
+                  </div>
                 </div>
               )}
             </div>
