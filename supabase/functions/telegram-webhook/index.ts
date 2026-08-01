@@ -3,6 +3,13 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 const TELEGRAM_API = 'https://api.telegram.org'
 const SEP = '━━━━━━━━━━━━━━━━'
 const BULAN_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+const BULAN_ID_FULL = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+const BULAN_CARI: Record<string, number> = (() => {
+  const m: Record<string, number> = {}
+  BULAN_ID.forEach((b, i) => { m[b.toLowerCase()] = i + 1 })
+  BULAN_ID_FULL.forEach((b, i) => { m[b.toLowerCase()] = i + 1 })
+  return m
+})()
 
 const STATUS_EDIT = ['Masuk', 'Sedang Edit', 'Revisi', 'Selesai']
 const STATUS_BAYAR = ['Belum Bayar', 'Lunas']
@@ -33,7 +40,42 @@ function formatDate(iso?: string | null): string {
   if (!iso) return '-'
   const d = new Date(iso.length === 10 ? iso + 'T00:00:00' : iso)
   if (isNaN(d.getTime())) return '-'
-  return `${d.getDate()} ${BULAN_ID[d.getMonth()]} ${d.getFullYear()}`
+  return `${String(d.getDate()).padStart(2, '0')} ${BULAN_ID[d.getMonth()]} ${d.getFullYear()}`
+}
+
+function parseDateInput(text: string): string | null | undefined {
+  const t = text.trim()
+  if (t === '-') return null
+
+  let dd = 0
+  let mm = 0
+  let yy = 0
+
+  if (/^\d{8}$/.test(t)) {
+    dd = Number(t.slice(0, 2))
+    mm = Number(t.slice(2, 4))
+    yy = Number(t.slice(4, 8))
+  } else if (/^\d{4}[-/]\d{2}[-/]\d{2}$/.test(t)) {
+    yy = Number(t.slice(0, 4))
+    mm = Number(t.slice(5, 7))
+    dd = Number(t.slice(8, 10))
+  } else if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}$/.test(t)) {
+    const p = t.split(/[-/]/)
+    dd = Number(p[0])
+    mm = Number(p[1])
+    yy = Number(p[2])
+  } else {
+    const m = t.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/)
+    if (!m) return undefined
+    dd = Number(m[1])
+    mm = BULAN_CARI[m[2].toLowerCase().replace(/\.$/, '')] ?? 0
+    yy = Number(m[3])
+  }
+
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || yy < 1000 || yy > 9999) return undefined
+  const d = new Date(Date.UTC(yy, mm - 1, dd))
+  if (d.getUTCFullYear() !== yy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return undefined
+  return `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
 }
 
 async function getSecret(
@@ -85,7 +127,7 @@ const wizardPrompts: { field: keyof WizardData; text: string }[] = [
   { field: 'nama_project', text: 'Nama project?' },
   { field: 'vendor_id', text: 'Pilih nomor vendor:' },
   { field: 'jenis_edit', text: 'Pilih jenis edit:' },
-  { field: 'deadline', text: 'Deadline? Kirim dalam format 15 Agu 2026,\natau kirim "-" jika tidak ada.' },
+  { field: 'deadline', text: 'Deadline? Contoh: 02082026 atau 15 Agu 2026,\natau kirim "-" jika tidak ada.' },
   { field: 'status_edit', text: 'Status edit?\n1) Masuk\n2) Sedang Edit\n3) Revisi\n4) Selesai' },
   { field: 'status_bayar', text: 'Status bayar?\n1) Belum Bayar\n2) Lunas' },
   { field: 'status_cetak', text: 'Status cetak?\n1) Belum Cetak\n2) Sudah Dikirim\n3) Sudah Cetak' },
@@ -338,12 +380,11 @@ function parseStep(
       return { ok: true, value: list[idx].jenis }
     }
     case 4: {
-      const t = text.trim()
-      if (t === '-') return { ok: true, value: null }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return fail('⚠️ Format salah. Gunakan 15 Agu 2026 (contoh),\natau kirim "-".')
-      const d = new Date(t + 'T00:00:00')
-      if (isNaN(d.getTime())) return fail('⚠️ Tanggal tidak valid. Coba lagi.')
-      return { ok: true, value: t }
+      const parsed = parseDateInput(text)
+      if (parsed === undefined) {
+        return fail('⚠️ Format salah. Contoh: 02082026 atau 15 Agu 2026.\nAtau kirim "-" jika tidak ada.')
+      }
+      return { ok: true, value: parsed }
     }
     case 5: {
       if (!/^[1234]$/.test(text.trim())) return fail('⚠️ Pilih 1, 2, 3, atau 4.')
