@@ -2,6 +2,7 @@ import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import Sidebar from './Sidebar'
 import BottomNav from './BottomNav'
+import NotificationBell from './NotificationBell'
 
 export default function AppLayout() {
   const { user, loading } = useAuth()
@@ -20,6 +21,7 @@ export default function AppLayout() {
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar />
       <main className="flex-1 overflow-y-auto pb-20 md:pb-0">
+        <NotificationBell />
         <Outlet />
       </main>
       <BottomNav />

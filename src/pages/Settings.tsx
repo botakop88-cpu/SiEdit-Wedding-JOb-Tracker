@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Trash2, AlertTriangle, Database, Info, LogOut } from 'lucide-react'
+import { RotateCcw, Trash2, AlertTriangle, Database, Info, LogOut, MessageCircle } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
-import type { Job, Vendor, Invoice } from '../lib/types'
-import { formatDate, rupiah } from '../lib/utils'
+import type { Job, Vendor, Invoice, UserSettings } from '../lib/types'
+import { formatDate, rupiah, validateWhatsApp } from '../lib/utils'
 
 type RecycleTab = 'job' | 'vendor' | 'invoice'
 
@@ -15,18 +15,24 @@ export default function Settings() {
   const [deletedVendors, setDeletedVendors] = useState<Vendor[]>([])
   const [deletedInvoices, setDeletedInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
+  const [waNumber, setWaNumber] = useState('')
+  const [waSaved, setWaSaved] = useState(false)
+  const [waError, setWaError] = useState('')
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
     setLoading(true)
-    const [jC, vC, iC, jD, vD, iD] = await Promise.all([
+    const [jC, vC, iC, jD, vD, iD, wS] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('vendor').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('invoice').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('job').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       supabase.from('vendor').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       supabase.from('invoice').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      user
+        ? supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle()
+        : Promise.resolve({ data: null }),
     ])
     setCounts({
       jobs: jC.count ?? 0,
@@ -36,7 +42,33 @@ export default function Settings() {
     if (jD.data) setDeletedJobs(jD.data as Job[])
     if (vD.data) setDeletedVendors(vD.data as Vendor[])
     if (iD.data) setDeletedInvoices(iD.data as Invoice[])
+    if (wS.data) {
+      const s = wS.data as UserSettings
+      setWaNumber(s.notif_whatsapp ?? '')
+    }
     setLoading(false)
+  }
+
+  async function saveWa() {
+    if (!user) return
+    const digits = waNumber.replace(/\D/g, '')
+    if (digits && !validateWhatsApp(waNumber)) {
+      setWaError('Nomor WhatsApp tidak valid (min 10 digit).')
+      setWaSaved(false)
+      return
+    }
+    setWaError('')
+    const payload = { user_id: user.id, notif_whatsapp: digits || null, updated_at: new Date().toISOString() }
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert(payload, { onConflict: 'user_id' })
+    if (error) {
+      setWaError('Gagal menyimpan: ' + error.message)
+      setWaSaved(false)
+      return
+    }
+    setWaSaved(true)
+    setTimeout(() => setWaSaved(false), 2500)
   }
 
   async function restore(table: string, id: string) {
@@ -135,6 +167,33 @@ export default function Settings() {
         </div>
         <p className="text-xs text-slate-500">Hosting: Vercel · Database: Supabase Cloud · Region: Singapore</p>
         <p className="text-xs text-slate-400">Data diisolasi per akun pengguna via Row Level Security (RLS).</p>
+      </section>
+
+      {/* Notifikasi WhatsApp */}
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+        <div className="flex items-center gap-2 mb-1">
+          <MessageCircle className="w-4 h-4 text-emerald-500" />
+          <h2 className="font-semibold text-sm text-slate-800">Notifikasi WhatsApp</h2>
+        </div>
+        <p className="text-xs text-slate-500">
+          Nomor WhatsApp tujuan untuk tombol notifikasi deadline. Gunakan format 08xx atau 628xx.
+        </p>
+        <div className="flex gap-2">
+          <input
+            value={waNumber}
+            onChange={(e) => setWaNumber(e.target.value)}
+            placeholder="cth: 081234567890"
+            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+          />
+          <button
+            onClick={saveWa}
+            className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 transition-colors"
+          >
+            Simpan
+          </button>
+        </div>
+        {waError && <p className="text-xs text-red-600">{waError}</p>}
+        {waSaved && <p className="text-xs text-emerald-600">Nomor WhatsApp tersimpan.</p>}
       </section>
 
       {/* Recycle Bin */}

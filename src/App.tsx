@@ -15,6 +15,7 @@ const Vendors = lazy(() => import('./pages/Vendors'))
 const Invoices = lazy(() => import('./pages/Invoices'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Reports = lazy(() => import('./pages/Reports'))
+const Notifications = lazy(() => import('./pages/Notifications'))
 
 function LoadingFallback() {
   return (
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/invoices" element={<Suspense fallback={<LoadingFallback />}><Invoices /></Suspense>} />
               <Route path="/settings" element={<Suspense fallback={<LoadingFallback />}><Settings /></Suspense>} />
               <Route path="/reports" element={<Suspense fallback={<LoadingFallback />}><Reports /></Suspense>} />
+              <Route path="/notifications" element={<Suspense fallback={<LoadingFallback />}><Notifications /></Suspense>} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
