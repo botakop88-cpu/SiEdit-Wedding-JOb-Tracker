@@ -8,6 +8,7 @@ const STATUS_BAYAR = ['Belum Bayar', 'Lunas']
 const STATUS_CETAK = ['Belum Cetak', 'Sudah Dikirim', 'Sudah Cetak']
 
 type WizardData = {
+  mode?: 'tambah' | 'lunas'
   nama_project?: string
   vendor_id?: string
   vendor_list?: { id: string; nama: string }[]
@@ -18,6 +19,8 @@ type WizardData = {
   status_bayar?: string
   status_cetak?: string
   catatan?: string | null
+  lunas_list?: { id: string; nama_project: string; harga: number; vendor_nama: string }[]
+  lunas_pick?: number
 }
 
 async function getSecret(
@@ -50,7 +53,7 @@ const HELP_TEXT =
   'Perintah yang tersedia:\n\n' +
   '/tambah — Tambah job baru (wizard bertahap)\n' +
   '/belumbayar — Daftar job belum bayar\n' +
-  '/lunas — Daftar job lunas\n' +
+  '/lunas — Tandai job sebagai lunas\n' +
   '/deadline — Job mendekati/melewati deadline\n' +
   '/batal — Batalkan proses yang sedang berjalan\n' +
   '/help — Bantuan ini\n\n' +
@@ -79,6 +82,13 @@ async function handleWizard(
 
   const step = user.wizard_step as number
   const data = (user.wizard_data ?? {}) as WizardData
+  const mode = data.mode ?? 'tambah'
+
+  // Mode /lunas: tandai job lunas
+  if (mode === 'lunas') {
+    return handleLunasWizard(supabase, token, chatId, text, user)
+  }
+
   const prompt = wizardPrompts[step - 1]
 
   // step 9 = catatan, step 10 = konfirmasi
@@ -155,6 +165,86 @@ async function handleWizard(
     await sendMessage(token, chatId, `Gagal menyimpan job: ${error.message}`)
   } else {
     await sendMessage(token, chatId, `✅ Job "${data.nama_project}" berhasil ditambahkan!`)
+  }
+  return true
+}
+
+async function handleLunasWizard(
+  supabase: ReturnType<typeof createClient>,
+  token: string,
+  chatId: number,
+  text: string,
+  user: Record<string, unknown>,
+) {
+  const step = user.wizard_step as number
+  const data = (user.wizard_data ?? {}) as WizardData
+  const list = data.lunas_list ?? []
+
+  if (step === 1) {
+    const n = text.trim()
+    if (!/^\d+$/.test(n)) {
+      await sendMessage(token, chatId, 'Kirim nomor dari daftar, atau /batal.')
+      return true
+    }
+    const idx = Number(n) - 1
+    if (idx < 0 || idx >= list.length) {
+      await sendMessage(token, chatId, `Nomor tidak valid. Pilih 1-${list.length}, atau /batal.`)
+      return true
+    }
+    const pick = list[idx]
+    data.lunas_pick = idx
+    await supabase
+      .from('user_settings')
+      .update({ wizard_step: 2, wizard_data: data, updated_at: new Date().toISOString() })
+      .eq('user_id', user.user_id as string)
+    await sendMessage(
+      token,
+      chatId,
+      `Tandai LUNAS untuk:\n\n📌 ${pick.nama_project}\n🏢 ${pick.vendor_nama}\n💰 Rp${pick.harga.toLocaleString('id-ID')}\n\nBalas "ya" untuk konfirmasi, atau "batal".`,
+    )
+    return true
+  }
+
+  // step 2 = konfirmasi
+  const reply = text.toLowerCase()
+  if (reply === 'batal' || reply === 'tidak' || reply === 'no') {
+    await clearWizard(supabase, user.user_id as string)
+    await sendMessage(token, chatId, 'Dibatalkan.')
+    return true
+  }
+  if (reply !== 'ya' && reply !== 'yes' && reply !== 'simpan') {
+    await sendMessage(token, chatId, 'Balas "ya" untuk menandai lunas, atau "batal".')
+    return true
+  }
+
+  const pick = list[data.lunas_pick ?? 0]
+  if (!pick) {
+    await clearWizard(supabase, user.user_id as string)
+    await sendMessage(token, chatId, 'Data tidak ditemukan. Coba /lunas lagi.')
+    return true
+  }
+
+  const WIB = 7 * 60 * 60 * 1000
+  const nowWIB = new Date(Date.now() + WIB)
+  const today = nowWIB.getFullYear() + '-' +
+    String(nowWIB.getMonth() + 1).padStart(2, '0') + '-' +
+    String(nowWIB.getDate()).padStart(2, '0')
+
+  const { error } = await supabase
+    .from('job')
+    .update({
+      status_bayar: 'Lunas',
+      tanggal_lunas: today,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', pick.id)
+    .eq('user_id', user.user_id as string)
+
+  await clearWizard(supabase, user.user_id as string)
+  if (error) {
+    await sendMessage(token, chatId, `Gagal menandai lunas: ${error.message}`)
+  } else {
+    await sendMessage(token, chatId, `✅ "${pick.nama_project}" ditandai LUNAS (${today}).`)
   }
   return true
 }
@@ -324,7 +414,7 @@ Deno.serve(async (req) => {
       .from('user_settings')
       .update({
         wizard_step: 1,
-        wizard_data: { vendor_list: vendors },
+        wizard_data: { mode: 'tambah', vendor_list: vendors },
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', user.user_id)
@@ -341,7 +431,54 @@ Deno.serve(async (req) => {
     }
     return new Response('ok')
   }
-  if (cmd === '/belumbayar' || cmd === '/lunas' || cmd === '/deadline') {
+  if (cmd === '/lunas') {
+    const user = await getUserByChat(supabase, chatId)
+    if (!user) {
+      await sendMessage(
+        token,
+        chatId,
+        'Kamu belum terhubung. Buka Pengaturan di web SiEdit, klik "Hubungkan Telegram", lalu kirim kode yang tampil.',
+      )
+      return new Response('ok')
+    }
+    const { data: jobs, error } = await supabase
+      .from('job')
+      .select('id, nama_project, harga, vendor:vendor_id(nama)')
+      .eq('user_id', user.user_id)
+      .neq('status_bayar', 'Lunas')
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (error) {
+      await sendMessage(token, chatId, 'Terjadi kesalahan saat membaca data.')
+      return new Response('ok')
+    }
+    if (!jobs || jobs.length === 0) {
+      await sendMessage(token, chatId, 'Semua sudah lunas! 🎉')
+      return new Response('ok')
+    }
+    const lunasList = jobs.map((j) => ({
+      id: j.id,
+      nama_project: j.nama_project,
+      harga: j.harga,
+      vendor_nama: j.vendor?.nama ?? '-',
+    }))
+    const lines = lunasList.map(
+      (j, i) => `${i + 1}) ${j.nama_project} — ${j.vendor_nama} — Rp${j.harga.toLocaleString('id-ID')}`,
+    )
+    await supabase
+      .from('user_settings')
+      .update({
+        wizard_step: 1,
+        wizard_data: { mode: 'lunas', lunas_list: lunasList },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', user.user_id)
+    await sendMessage(token, chatId, `Pilih job yang akan ditandai LUNAS:\n\n${lines.join('\n')}\n\nBalas nomor, atau /batal.`)
+    return new Response('ok')
+  }
+  if (cmd === '/belumbayar' || cmd === '/deadline') {
     await handleQuery(supabase, token, chatId, cmd)
     return new Response('ok')
   }
@@ -420,13 +557,12 @@ async function handleQuery(
     return
   }
 
-  if (cmd === '/belumbayar' || cmd === '/lunas') {
-    const status = cmd === '/lunas' ? 'Lunas' : 'Belum Bayar'
+  if (cmd === '/belumbayar') {
     const { data: jobs, error } = await supabase
       .from('job')
       .select('nama_project, harga, vendor:vendor_id(nama)')
       .eq('user_id', user.user_id)
-      .eq('status_bayar', status)
+      .eq('status_bayar', 'Belum Bayar')
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
 
@@ -435,18 +571,13 @@ async function handleQuery(
       return
     }
     if (!jobs || jobs.length === 0) {
-      await sendMessage(
-        token,
-        chatId,
-        cmd === '/lunas' ? 'Belum ada job yang lunas.' : 'Semua sudah lunas! 🎉',
-      )
+      await sendMessage(token, chatId, 'Semua sudah lunas! 🎉')
       return
     }
-    const icon = cmd === '/lunas' ? '✅' : '💰'
     const lines = jobs.map(
-      (j) => `${icon} ${j.nama_project} — ${j.vendor?.nama ?? '-'} — Rp${j.harga.toLocaleString('id-ID')}`,
+      (j) => `💰 ${j.nama_project} — ${j.vendor?.nama ?? '-'} — Rp${j.harga.toLocaleString('id-ID')}`,
     )
-    await sendMessage(token, chatId, `${cmd === '/lunas' ? 'LUNAS' : 'BELUM BAYAR'} (${jobs.length})\n\n${lines.join('\n')}`)
+    await sendMessage(token, chatId, `BELUM BAYAR (${jobs.length})\n\n${lines.join('\n')}`)
     return
   }
 
