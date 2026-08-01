@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { BarChart3, TrendingUp, Award, Briefcase, Calendar, Download } from 'lucide-react'
+import ExcelJS from 'exceljs'
 import { supabase } from '../lib/supabaseClient'
 import { rupiah } from '../lib/utils'
 
@@ -174,54 +175,74 @@ export default function Reports() {
       .slice(0, 5)
   }, [raw])
 
-  // ─── Export CSV ────────────────────────────────────
-  function fmtCSV(v: string | number | null | undefined) {
-    if (v === null || v === undefined || v === '') return '-'
-    return String(v)
-  }
-
+  // ─── Export Excel ──────────────────────────────────
   function fmtHarga(v: number) {
     return 'Rp' + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
   }
 
   function fmtDate(v: string | null | undefined) {
     if (!v) return '-'
-    return v
+    const [y, m, d] = v.split('-')
+    if (!y || !m || !d) return v
+    return `${d}/${m}/${y}`
   }
 
-  function csvEscape(val: string): string {
-    if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
-      return '"' + val.replace(/"/g, '""') + '"'
-    }
-    return val
-  }
+  async function dataExportXLSX() {
+    const cols = ['PROYEK', 'VENDOR', 'JENIS EDIT', 'HARGA', 'DEADLINE', 'STATUS EDIT', 'STATUS BAYAR', 'STATUS CETAK', 'TANGGAL LUNAS', 'CATATAN']
 
-  function dataExportCSV() {
-    const cols = ['Project','Vendor','Jenis Edit','Harga','Deadline','Status Edit','Status Bayar','Status Cetak','Tanggal Lunas','Catatan']
-    const header = cols.join(',')
+    const rows = raw.map((j) => [
+      j.nama_project,
+      j.vendor?.nama ?? '-',
+      j.jenis_edit,
+      fmtHarga(j.harga),
+      fmtDate(j.deadline),
+      j.status_edit,
+      j.status_bayar,
+      j.status_cetak,
+      fmtDate(j.tanggal_lunas),
+      j.catatan ? String(j.catatan) : '-',
+    ])
 
-    const rows = raw.map((j) => {
-      const vals = [
-        csvEscape(j.nama_project),
-        csvEscape(j.vendor?.nama ?? '-'),
-        csvEscape(j.jenis_edit),
-        csvEscape(fmtHarga(j.harga)),
-        csvEscape(fmtDate(j.deadline)),
-        csvEscape(j.status_edit),
-        csvEscape(j.status_bayar),
-        csvEscape(j.status_cetak),
-        csvEscape(fmtDate(j.tanggal_lunas)),
-        csvEscape(fmtCSV(j.catatan)),
-      ]
-      return vals.join(',')
+    const workbook = new ExcelJS.Workbook()
+    const sheet = workbook.addWorksheet('Laporan SiEdit')
+
+    sheet.addRow(cols)
+    const headerRow = sheet.getRow(1)
+    headerRow.height = 20
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE11D48' } }
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' }
+    headerRow.eachCell((cell) => {
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } }
     })
 
-    const csv = '\uFEFF' + [header, ...rows].join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    rows.forEach((r) => sheet.addRow(r))
+
+    const totalRow = sheet.addRow(['TOTAL', '', `${totalJobs} job`, fmtHarga(totalAll), '', '', '', '', '', ''])
+    totalRow.font = { bold: true }
+    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1F2' } }
+
+    sheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return
+      row.getCell(4).alignment = { horizontal: 'right' }
+      row.getCell(5).alignment = { horizontal: 'center' }
+      row.getCell(9).alignment = { horizontal: 'center' }
+    })
+
+    const allRows = [cols, ...rows, ['TOTAL', '', `${totalJobs} job`, fmtHarga(totalAll), '', '', '', '', '', '']]
+    cols.forEach((_, ci) => {
+      const maxLen = allRows.reduce((m, r) => Math.max(m, String(r[ci] ?? '').length), cols[ci].length)
+      sheet.getColumn(ci + 1).width = Math.min(Math.max(maxLen + 2, 10), 45)
+    })
+
+    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+
+    const buffer = await workbook.xlsx.writeBuffer()
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `data-lunas-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.csv`
+    a.download = `data-lunas-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.xlsx`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -259,9 +280,9 @@ export default function Reports() {
             className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
             {years.map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
-          <button onClick={dataExportCSV} disabled={!hasData}
+          <button onClick={dataExportXLSX} disabled={!hasData}
             className="ml-auto flex items-center gap-1 text-xs text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-300 rounded-lg px-2.5 py-1.5 font-medium transition-colors disabled:opacity-40">
-            <Download className="w-3.5 h-3.5" /> CSV
+            <Download className="w-3.5 h-3.5" /> Excel
           </button>
         </div>
       </div>
