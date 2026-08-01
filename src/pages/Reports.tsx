@@ -187,6 +187,23 @@ export default function Reports() {
     return `${d}/${m}/${y}`
   }
 
+  const STATUS_STYLE: Record<string, { fill: string; font: string }> = {
+    'Selesai': { fill: 'FFDCFCE7', font: 'FF15803D' },
+    'Lunas': { fill: 'FFDCFCE7', font: 'FF15803D' },
+    'Sudah Cetak': { fill: 'FFDBEAFE', font: 'FF1D4ED8' },
+    'Sudah Dikirim': { fill: 'FFDBEAFE', font: 'FF1D4ED8' },
+    'Belum Bayar': { fill: 'FFFFE4E6', font: 'FFB91C1C' },
+    'Belum Cetak': { fill: 'FFFFF3C4', font: 'FFB45309' },
+    'Revisi': { fill: 'FFFFF3C4', font: 'FFB45309' },
+    'Masuk': { fill: 'FFF1F5F9', font: 'FF475569' },
+  }
+  const THIN_BORDER = {
+    top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+  } as const
+
   async function dataExportXLSX() {
     const cols = ['PROYEK', 'VENDOR', 'JENIS EDIT', 'HARGA', 'DEADLINE', 'STATUS EDIT', 'STATUS BAYAR', 'STATUS CETAK', 'TANGGAL LUNAS', 'CATATAN']
 
@@ -206,14 +223,29 @@ export default function Reports() {
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('Laporan SiEdit')
 
+    const periode = `${monthList[0]?.label ?? ''} — ${monthList[monthList.length - 1]?.label ?? ''}`
+
+    sheet.addRow([`LAPORAN PENGHASILAN SIEDIT`])
+    sheet.addRow([periode])
+    const titleRow = sheet.getRow(1)
+    titleRow.height = 24
+    titleRow.font = { bold: true, size: 14, color: { argb: 'FF881337' } }
+    titleRow.alignment = { vertical: 'middle', horizontal: 'center' }
+    const periodeRow = sheet.getRow(2)
+    periodeRow.height = 16
+    periodeRow.font = { size: 10, italic: true, color: { argb: 'FF64748B' } }
+    periodeRow.alignment = { vertical: 'middle', horizontal: 'center' }
+    sheet.mergeCells(1, 1, 1, cols.length)
+    sheet.mergeCells(2, 1, 2, cols.length)
+
     sheet.addRow(cols)
-    const headerRow = sheet.getRow(1)
+    const headerRow = sheet.getRow(3)
     headerRow.height = 20
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE11D48' } }
     headerRow.alignment = { vertical: 'middle', horizontal: 'center' }
     headerRow.eachCell((cell) => {
-      cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } }
+      cell.border = THIN_BORDER
     })
 
     rows.forEach((r) => sheet.addRow(r))
@@ -222,20 +254,37 @@ export default function Reports() {
     totalRow.font = { bold: true }
     totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1F2' } }
 
+    const dataStartRow = 4
+    const dataEndRow = 3 + rows.length
     sheet.eachRow((row, rowNum) => {
-      if (rowNum === 1) return
-      row.getCell(4).alignment = { horizontal: 'right' }
-      row.getCell(5).alignment = { horizontal: 'center' }
-      row.getCell(9).alignment = { horizontal: 'center' }
+      row.eachCell((cell, colNum) => {
+        if (rowNum >= 3) cell.border = THIN_BORDER
+        if (rowNum >= dataStartRow && rowNum <= dataEndRow) {
+          if ((rowNum - dataStartRow) % 2 === 1) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
+          }
+          if (colNum === 4) cell.alignment = { vertical: 'middle', horizontal: 'right' }
+          if (colNum === 5 || colNum === 9) cell.alignment = { vertical: 'middle', horizontal: 'center' }
+          if (colNum === 10) cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true }
+          if (colNum === 6 || colNum === 7 || colNum === 8) {
+            const style = STATUS_STYLE[String(cell.value)]
+            if (style) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style.fill } }
+              cell.font = { bold: true, color: { argb: style.font } }
+            }
+            cell.alignment = { vertical: 'middle', horizontal: 'center' }
+          }
+        }
+      })
     })
 
     const allRows = [cols, ...rows, ['TOTAL', '', `${totalJobs} job`, fmtHarga(totalAll), '', '', '', '', '', '']]
     cols.forEach((_, ci) => {
       const maxLen = allRows.reduce((m, r) => Math.max(m, String(r[ci] ?? '').length), cols[ci].length)
-      sheet.getColumn(ci + 1).width = Math.min(Math.max(maxLen + 2, 10), 45)
+      sheet.getColumn(ci + 1).width = ci === 9 ? Math.min(Math.max(maxLen + 2, 15), 60) : Math.min(Math.max(maxLen + 2, 10), 45)
     })
 
-    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    sheet.views = [{ state: 'frozen', ySplit: 3 }]
 
     const buffer = await workbook.xlsx.writeBuffer()
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
