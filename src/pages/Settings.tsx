@@ -275,6 +275,15 @@ export default function Settings() {
             >
               Buka Bot Telegram
             </a>
+            <div className="border-t border-slate-100 pt-3">
+              <p className="text-xs text-slate-500">
+                Di Telegram Web tidak otomatis? Buka chat <span className="font-medium">@{TELEGRAM_BOT_USERNAME}</span>,
+                lalu kirim kode ini secara manual:
+              </p>
+              <p className="mt-2 text-center text-2xl font-bold tracking-widest text-sky-600 bg-sky-50 border border-sky-200 rounded-lg py-2">
+                /start {connectCode}
+              </p>
+            </div>
             {connecting && (
               <p className="text-xs text-slate-400">Menunggu konfirmasi dari Telegram...</p>
             )}

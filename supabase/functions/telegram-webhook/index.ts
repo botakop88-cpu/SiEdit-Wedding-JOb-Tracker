@@ -39,21 +39,26 @@ Deno.serve(async (req) => {
   const chatId = message.chat.id
   const text = String(message.text).trim()
 
-  const m = text.match(/^\/start\s+([A-Za-z0-9]{6,})$/i)
+  const m = text.match(/^\/start(?:\s+([A-Za-z0-9]{6,}))?$/i)
+  let code: string | null = null
 
-  if (!m) {
+  if (m) {
+    code = m[1] ?? null
+  } else if (/^[A-Za-z0-9]{6,}$/.test(text)) {
+    code = text
+  }
+
+  if (!code) {
     const token = await getSecret(supabase, 'telegram_bot_token')
     if (token) {
       await sendMessage(
         token,
         chatId,
-        'Halo! Untuk terhubung ke notifikasi SiEdit, buka menu Pengaturan di aplikasi lalu klik tombol "Hubungkan Telegram".',
+        'Halo! Untuk terhubung ke notifikasi SiEdit:\n\n1. Buka menu Pengaturan di aplikasi SiEdit\n2. Klik "Hubungkan Telegram"\n3. Salin kode yang tampil, lalu kirim ke bot ini dalam format:\n\n/start KODE',
       )
     }
     return new Response('ok')
   }
-
-  const code = m[1]
   const now = new Date().toISOString()
 
   const { data: settings, error } = await supabase
