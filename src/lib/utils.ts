@@ -37,25 +37,11 @@ export function timeAgo(dateStr: string): string {
   return `${days} hari yang lalu`
 }
 
-// ─── WhatsApp validation ────────────────────────────────────────
+// ─── WhatsApp validation (vendor contact) ───────────────────────
 
 export function validateWhatsApp(value: string): boolean {
   const digits = value.replace(/\D/g, '')
   return digits.length >= 10 && digits.length <= 15
-}
-
-// Convert 08xx... or +628xx... to international 628xx... for wa.me links
-export function normalizeWhatsApp(value: string): string {
-  const digits = value.replace(/\D/g, '')
-  if (digits.startsWith('0')) return '62' + digits.slice(1)
-  if (digits.startsWith('628')) return digits
-  if (digits.startsWith('62')) return digits
-  return digits
-}
-
-export function buildWaLink(number: string, text: string): string {
-  const no = normalizeWhatsApp(number)
-  return `https://wa.me/${no}?text=${encodeURIComponent(text)}`
 }
 
 // ─── Today as YYYY-MM-DD ────────────────────────────────────────

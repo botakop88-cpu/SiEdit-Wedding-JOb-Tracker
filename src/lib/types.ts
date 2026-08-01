@@ -57,7 +57,10 @@ export interface InvoiceItem {
 export interface UserSettings {
   id: string
   user_id: string
-  notif_whatsapp: string | null
+  telegram_chat_id: string | null
+  telegram_connect_code: string | null
+  telegram_connect_expires: string | null
+  notif_jam: string | null
   created_at: string
   updated_at: string | null
 }

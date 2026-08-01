@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Bell, MessageCircle, Settings, RefreshCw } from 'lucide-react'
+import { Bell, Settings, RefreshCw, Send } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
-import type { Job, UserSettings } from '../lib/types'
-import { formatDate, daysUntil, buildWaLink, validateWhatsApp } from '../lib/utils'
+import type { UserSettings } from '../lib/types'
+import { formatDate, daysUntil } from '../lib/utils'
 import {
   useUrgentJobs,
   deadlineGroup,
   daysLabel,
   urgentGroupMeta,
-  buildWaMessage,
 } from '../lib/useUrgentJobs'
 
 const GROUP_ORDER = ['overdue', 'hariIni', 'besok', 'h2', 'h3'] as const
@@ -18,9 +17,6 @@ export default function Notifications() {
   const { user } = useAuth()
   const { jobs, loading, count } = useUrgentJobs()
   const [settings, setSettings] = useState<UserSettings | null>(null)
-  const [waNumber, setWaNumber] = useState('')
-  const [waError, setWaError] = useState('')
-  const [opening, setOpening] = useState<string | null>(null)
 
   useEffect(() => {
     loadSettings()
@@ -33,30 +29,7 @@ export default function Notifications() {
       .select('*')
       .eq('user_id', user.id)
       .maybeSingle()
-    if (data) {
-      setSettings(data as UserSettings)
-      setWaNumber((data as UserSettings).notif_whatsapp ?? '')
-    }
-  }
-
-  async function saveWa() {
-    if (!user) return
-    const digits = waNumber.replace(/\D/g, '')
-    if (digits && !validateWhatsApp(waNumber)) {
-      setWaError('Nomor WhatsApp tidak valid (min 10 digit).')
-      return
-    }
-    setWaError('')
-    const payload = { user_id: user.id, notif_whatsapp: digits || null, updated_at: new Date().toISOString() }
-    const { error } = await supabase
-      .from('user_settings')
-      .upsert(payload, { onConflict: 'user_id' })
-    if (error) {
-      setWaError('Gagal menyimpan: ' + error.message)
-      return
-    }
-    await loadSettings()
-    setWaNumber(digits)
+    if (data) setSettings(data as UserSettings)
   }
 
   const groups = GROUP_ORDER.map((g) => ({
@@ -67,17 +40,6 @@ export default function Notifications() {
       .sort((a, b) => (a.deadline ?? '').localeCompare(b.deadline ?? '')),
   })).filter((x) => x.items.length > 0)
 
-  function openWa(j: Job) {
-    if (!waNumber) {
-      setWaError('Isi nomor WhatsApp di bawah dulu.')
-      return
-    }
-    const days = daysUntil(j.deadline ?? '')
-    setOpening(j.id)
-    window.open(buildWaLink(waNumber, buildWaMessage(j, days)), '_blank', 'noopener')
-    setTimeout(() => setOpening(null), 1000)
-  }
-
   return (
     <div className="p-4 md:p-8 max-w-3xl mx-auto space-y-5">
       <div>
@@ -87,32 +49,20 @@ export default function Notifications() {
         <p className="text-sm text-slate-500 mt-0.5">Job dengan deadline mendekat atau terlambat</p>
       </div>
 
-      {/* Nomor WhatsApp */}
-      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+      {/* Status Telegram */}
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-2">
         <div className="flex items-center gap-2">
-          <MessageCircle className="w-4 h-4 text-emerald-500" />
-          <h2 className="font-semibold text-sm text-slate-800">Nomor WhatsApp Tujuan</h2>
+          <Send className="w-4 h-4 text-sky-500" />
+          <h2 className="font-semibold text-sm text-slate-800">Notifikasi Telegram</h2>
         </div>
-        <p className="text-xs text-slate-400">
-          Tombol WhatsApp pada job di bawah akan menghubungi nomor ini. Gunakan format 08xx atau 628xx.
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={waNumber}
-            onChange={(e) => setWaNumber(e.target.value)}
-            placeholder="cth: 081234567890"
-            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
-          />
-          <button
-            onClick={saveWa}
-            className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 transition-colors"
-          >
-            Simpan
-          </button>
-        </div>
-        {waError && <p className="text-xs text-red-600">{waError}</p>}
-        {settings?.notif_whatsapp && (
-          <p className="text-xs text-emerald-600">Tersimpan: {settings.notif_whatsapp}</p>
+        {settings?.telegram_chat_id ? (
+          <p className="text-xs text-emerald-600">
+            Terhubung. Rangkuman job di bawah dikirim otomatis pukul {settings.notif_jam?.slice(0, 5) ?? '07:00'} WIB.
+          </p>
+        ) : (
+          <p className="text-xs text-slate-500">
+            Belum terhubung. Hubungkan akun Telegram agar job mendesak dikirim otomatis ke Telegram.
+          </p>
         )}
       </section>
 
@@ -151,13 +101,6 @@ export default function Notifications() {
                         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badge}`}>
                           {daysLabel(days)}
                         </span>
-                        <button
-                          onClick={() => openWa(j)}
-                          disabled={opening === j.id}
-                          className="flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
-                        >
-                          <MessageCircle className="w-3.5 h-3.5" /> WA
-                        </button>
                       </div>
                     </li>
                   )
@@ -170,7 +113,7 @@ export default function Notifications() {
 
       <div className="text-center">
         <a href="/settings" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-rose-600 transition-colors">
-          <Settings className="w-3.5 h-3.5" /> Atur nomor di Pengaturan
+          <Settings className="w-3.5 h-3.5" /> Hubungkan Telegram di Pengaturan
         </a>
       </div>
     </div>

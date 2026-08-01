@@ -79,14 +79,3 @@ export function urgentGroupMeta(group: UrgentGroup): { label: string; badge: str
       return { label: 'H-3', badge: 'bg-yellow-100 text-yellow-700' }
   }
 }
-
-export function buildWaMessage(j: Job, days: number): string {
-  const label = days < 0 ? `sudah melewati deadline (${Math.abs(days)} hari)` : `tinggal ${days === 0 ? 'hari ini' : days === 1 ? 'besok' : `H-${days}`}`
-  const vendor = j.vendor?.nama ?? '-'
-  return [
-    `Halo ${vendor},`,
-    `untuk job *${j.nama_project}* (${j.jenis_edit})`,
-    `deadline ${j.deadline ?? '-'} ${label},`,
-    'mohon segera diselesaikan. Terima kasih.',
-  ].join('\n')
-}

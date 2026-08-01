@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Trash2, AlertTriangle, Database, Info, LogOut, MessageCircle } from 'lucide-react'
+import { RotateCcw, Trash2, AlertTriangle, Database, Info, LogOut, Send } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import type { Job, Vendor, Invoice, UserSettings } from '../lib/types'
-import { formatDate, rupiah, validateWhatsApp } from '../lib/utils'
+import { formatDate, rupiah } from '../lib/utils'
+
+const TELEGRAM_BOT_USERNAME = 'SiEdit_NotifBot'
 
 type RecycleTab = 'job' | 'vendor' | 'invoice'
 
@@ -15,24 +17,43 @@ export default function Settings() {
   const [deletedVendors, setDeletedVendors] = useState<Vendor[]>([])
   const [deletedInvoices, setDeletedInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
-  const [waNumber, setWaNumber] = useState('')
-  const [waSaved, setWaSaved] = useState(false)
-  const [waError, setWaError] = useState('')
+  const [settings, setSettings] = useState<UserSettings | null>(null)
+  const [notifJam, setNotifJam] = useState('07:00')
+  const [jamSaved, setJamSaved] = useState(false)
+  const [connectCode, setConnectCode] = useState<string | null>(null)
+  const [connectLink, setConnectLink] = useState<string | null>(null)
+  const [connecting, setConnecting] = useState(false)
 
   useEffect(() => { loadAll() }, [])
 
+  useEffect(() => {
+    if (!connectCode) return
+    const iv = setInterval(async () => {
+      if (!user) return
+      const { data } = await supabase
+        .from('user_settings')
+        .select('telegram_chat_id')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      if (data?.telegram_chat_id) {
+        setConnectCode(null)
+        setConnectLink(null)
+        setConnecting(false)
+        await loadSettings()
+      }
+    }, 3000)
+    return () => clearInterval(iv)
+  }, [connectCode, user])
+
   async function loadAll() {
     setLoading(true)
-    const [jC, vC, iC, jD, vD, iD, wS] = await Promise.all([
+    const [jC, vC, iC, jD, vD, iD] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('vendor').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('invoice').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('job').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       supabase.from('vendor').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
       supabase.from('invoice').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-      user
-        ? supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle()
-        : Promise.resolve({ data: null }),
     ])
     setCounts({
       jobs: jC.count ?? 0,
@@ -42,33 +63,80 @@ export default function Settings() {
     if (jD.data) setDeletedJobs(jD.data as Job[])
     if (vD.data) setDeletedVendors(vD.data as Vendor[])
     if (iD.data) setDeletedInvoices(iD.data as Invoice[])
-    if (wS.data) {
-      const s = wS.data as UserSettings
-      setWaNumber(s.notif_whatsapp ?? '')
-    }
+    await loadSettings()
     setLoading(false)
   }
 
-  async function saveWa() {
+  async function loadSettings() {
     if (!user) return
-    const digits = waNumber.replace(/\D/g, '')
-    if (digits && !validateWhatsApp(waNumber)) {
-      setWaError('Nomor WhatsApp tidak valid (min 10 digit).')
-      setWaSaved(false)
+    const { data } = await supabase
+      .from('user_settings')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (data) {
+      const s = data as UserSettings
+      setSettings(s)
+      setNotifJam((s.notif_jam ?? '07:00').slice(0, 5))
+    }
+  }
+
+  async function saveJam() {
+    if (!user) return
+    if (!notifJam) {
+      alert('Pilih jam notifikasi.')
       return
     }
-    setWaError('')
-    const payload = { user_id: user.id, notif_whatsapp: digits || null, updated_at: new Date().toISOString() }
+    const payload = { user_id: user.id, notif_jam: notifJam + ':00', updated_at: new Date().toISOString() }
     const { error } = await supabase
       .from('user_settings')
       .upsert(payload, { onConflict: 'user_id' })
     if (error) {
-      setWaError('Gagal menyimpan: ' + error.message)
-      setWaSaved(false)
+      alert('Gagal menyimpan: ' + error.message)
       return
     }
-    setWaSaved(true)
-    setTimeout(() => setWaSaved(false), 2500)
+    setJamSaved(true)
+    setTimeout(() => setJamSaved(false), 2500)
+  }
+
+  function generateCode(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    let code = ''
+    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)]
+    return code
+  }
+
+  async function startConnect() {
+    if (!user) return
+    const code = generateCode()
+    const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert(
+        { user_id: user.id, telegram_connect_code: code, telegram_connect_expires: expires, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' },
+      )
+    if (error) {
+      alert('Gagal memulai koneksi: ' + error.message)
+      return
+    }
+    setConnectCode(code)
+    setConnectLink(`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${code}`)
+    setConnecting(true)
+  }
+
+  async function disconnect() {
+    if (!user) return
+    if (!confirm('Putuskan koneksi Telegram?')) return
+    const { error } = await supabase
+      .from('user_settings')
+      .update({ telegram_chat_id: null, updated_at: new Date().toISOString() })
+      .eq('user_id', user.id)
+    if (error) {
+      alert('Gagal memutuskan: ' + error.message)
+      return
+    }
+    await loadSettings()
   }
 
   async function restore(table: string, id: string) {
@@ -169,31 +237,86 @@ export default function Settings() {
         <p className="text-xs text-slate-400">Data diisolasi per akun pengguna via Row Level Security (RLS).</p>
       </section>
 
-      {/* Notifikasi WhatsApp */}
+      {/* Notifikasi Telegram */}
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
         <div className="flex items-center gap-2 mb-1">
-          <MessageCircle className="w-4 h-4 text-emerald-500" />
-          <h2 className="font-semibold text-sm text-slate-800">Notifikasi WhatsApp</h2>
+          <Send className="w-4 h-4 text-sky-500" />
+          <h2 className="font-semibold text-sm text-slate-800">Notifikasi Telegram</h2>
         </div>
-        <p className="text-xs text-slate-500">
-          Nomor WhatsApp tujuan untuk tombol notifikasi deadline. Gunakan format 08xx atau 628xx.
-        </p>
-        <div className="flex gap-2">
+
+        {settings?.telegram_chat_id ? (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-700">
+                Terhubung ke <span className="font-medium text-slate-900">@{TELEGRAM_BOT_USERNAME}</span>
+              </p>
+              <button
+                onClick={disconnect}
+                className="text-xs text-red-600 hover:text-red-800 font-medium"
+              >
+                Putuskan
+              </button>
+            </div>
+            <p className="text-xs text-emerald-600">
+              Notifikasi deadline akan dikirim otomatis ke akun Telegram ini.
+            </p>
+          </div>
+        ) : connectCode ? (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-700">
+              Langkah 1: Buka bot <span className="font-medium">@{TELEGRAM_BOT_USERNAME}</span> di Telegram
+              lalu ketuk link di bawah (mengirim kode otomatis):
+            </p>
+            <a
+              href={connectLink ?? '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full text-center px-4 py-2.5 rounded-lg bg-sky-600 text-white text-sm font-medium hover:bg-sky-700 transition-colors"
+            >
+              Buka Bot Telegram
+            </a>
+            {connecting && (
+              <p className="text-xs text-slate-400">Menunggu konfirmasi dari Telegram...</p>
+            )}
+            <button
+              onClick={() => { setConnectCode(null); setConnectLink(null); setConnecting(false) }}
+              className="text-xs text-slate-400 hover:text-slate-600"
+            >
+              Batalkan
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-500">
+              Hubungkan akun Telegram untuk menerima notifikasi otomatis saat ada job mendekati deadline
+              (H-3) atau terlambat. Notifikasi hanya berisi job milik akun ini.
+            </p>
+            <button
+              onClick={startConnect}
+              className="w-full px-4 py-2.5 rounded-lg bg-sky-600 text-white text-sm font-medium hover:bg-sky-700 transition-colors"
+            >
+              Hubungkan Telegram
+            </button>
+          </div>
+        )}
+
+        <div className="border-t border-slate-100 pt-3 flex gap-2 items-center">
+          <label htmlFor="notif-jam" className="text-sm text-slate-700 shrink-0">Jam notifikasi</label>
           <input
-            value={waNumber}
-            onChange={(e) => setWaNumber(e.target.value)}
-            placeholder="cth: 081234567890"
-            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+            id="notif-jam"
+            type="time"
+            value={notifJam}
+            onChange={(e) => setNotifJam(e.target.value)}
+            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
           <button
-            onClick={saveWa}
+            onClick={saveJam}
             className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 transition-colors"
           >
             Simpan
           </button>
         </div>
-        {waError && <p className="text-xs text-red-600">{waError}</p>}
-        {waSaved && <p className="text-xs text-emerald-600">Nomor WhatsApp tersimpan.</p>}
+        {jamSaved && <p className="text-xs text-emerald-600">Jam notifikasi tersimpan.</p>}
       </section>
 
       {/* Recycle Bin */}

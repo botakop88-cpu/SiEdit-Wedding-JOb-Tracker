@@ -1,0 +1,172 @@
+import { createClient } from 'npm:@supabase/supabase-js@2'
+
+const TELEGRAM_API = 'https://api.telegram.org'
+const WIB_OFFSET_MS = 7 * 60 * 60 * 1000
+
+async function getSecret(
+  supabase: ReturnType<typeof createClient>,
+  name: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .schema('vault')
+    .from('decrypted_secrets')
+    .select('decrypted_secret')
+    .eq('name', name)
+    .maybeSingle()
+  if (error || !data) return null
+  return data.decrypted_secret as string
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T00:00:00')
+  d.setDate(d.getDate() + days)
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0')
+}
+
+function nowWIB(): Date {
+  return new Date(Date.now() + WIB_OFFSET_MS)
+}
+
+function todayWIBStr(): string {
+  const d = nowWIB()
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0')
+}
+
+function currentWIBTime(): string {
+  const d = nowWIB()
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+}
+
+function daysUntil(dateStr: string): number {
+  const now = nowWIB()
+  now.setHours(0, 0, 0, 0)
+  const target = new Date(dateStr + 'T00:00:00')
+  return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+function daysLabel(days: number): string {
+  if (days < 0) return `Terlambat ${Math.abs(days)} hari`
+  if (days === 0) return 'Deadline hari ini'
+  if (days === 1) return 'Deadline besok'
+  return `Deadline H-${days}`
+}
+
+function buildMessage(
+  jobs: {
+    nama_project: string
+    jenis_edit: string
+    deadline: string | null
+    status_edit: string
+    status_bayar: string
+    vendor?: { nama: string } | null
+  }[],
+  dateLabel: string,
+): string {
+  const groups: { header: string; items: { nama: string; detail: string; label: string }[] }[] = [
+    { header: '⛔ TERLAMBAT', items: [] },
+    { header: '🔴 HARI INI', items: [] },
+    { header: '🟠 BESOK', items: [] },
+    { header: '🟡 H-2', items: [] },
+    { header: '🟢 H-3', items: [] },
+  ]
+
+  for (const j of jobs) {
+    const days = daysUntil(j.deadline ?? '')
+    const detail = `${j.nama_project} (${j.jenis_edit}) - ${j.vendor?.nama ?? '-'}`
+    const label = daysLabel(days)
+    const item = { nama: detail, detail: `🗓 ${j.deadline ?? '-'} • ${label}`, label }
+    if (days < 0) groups[0].items.push(item)
+    else if (days === 0) groups[1].items.push(item)
+    else if (days === 1) groups[2].items.push(item)
+    else if (days === 2) groups[3].items.push(item)
+    else groups[4].items.push(item)
+  }
+
+  const lines: string[] = []
+  lines.push(`🔔 *RINGKASAN DEADLINE SIEDIT*`)
+  lines.push(`📅 ${dateLabel}`)
+  for (const g of groups) {
+    if (g.items.length === 0) continue
+    lines.push('')
+    lines.push(`*${g.header} (${g.items.length})*`)
+    for (const it of g.items) {
+      lines.push(`• ${it.nama}`)
+      lines.push(`  ${it.detail}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+Deno.serve(async (req) => {
+  if (req.method !== 'POST') return new Response('ok')
+
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+
+  const secret = await getSecret(supabase, 'telegram_dispatch_secret')
+  if (!secret || req.headers.get('x-internal-secret') !== secret) {
+    return new Response('unauthorized', { status: 401 })
+  }
+
+  const token = await getSecret(supabase, 'telegram_bot_token')
+  if (!token) return new Response('missing bot token', { status: 500 })
+
+  const maxDate = addDays(todayWIBStr(), 3)
+  const nowTime = currentWIBTime()
+
+  const { data: settings, error: sErr } = await supabase
+    .from('user_settings')
+    .select('user_id, telegram_chat_id, notif_jam')
+    .not('telegram_chat_id', 'is', null)
+
+  if (sErr || !settings) return new Response('no settings', { status: 200 })
+
+  const sent: string[] = []
+  for (const s of settings) {
+    const jam = (s.notif_jam ?? '07:00').slice(0, 5)
+    if (jam !== nowTime) continue
+
+    const { data: jobs, error: jErr } = await supabase
+      .from('job')
+      .select('nama_project, jenis_edit, deadline, status_edit, status_bayar, vendor:vendor_id(nama)')
+      .eq('user_id', s.user_id)
+      .is('deleted_at', null)
+      .not('deadline', 'is', null)
+      .lte('deadline', maxDate)
+      .not('status_edit', 'in', '("Selesai")')
+      .neq('status_bayar', 'Lunas')
+      .order('deadline')
+
+    if (jErr) continue
+    if (!jobs || jobs.length === 0) continue
+
+    const dateLabel = new Date(todayWIBStr() + 'T00:00:00').toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    })
+    const text = buildMessage(jobs as never[], dateLabel)
+
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: s.telegram_chat_id,
+        text,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+      }),
+    })
+    if (res.ok) sent.push(s.telegram_chat_id!)
+  }
+
+  return new Response(JSON.stringify({ ok: true, sent }), {
+    headers: { 'Content-Type': 'application/json' },
+  })
+})
