@@ -463,6 +463,55 @@ async function getVendorName(supabase: ReturnType<typeof createClient>, id: stri
   return data?.nama ?? '-'
 }
 
+type GroupBlock = {
+  vendor: string
+  subtotal: number
+  items: string[]
+}
+
+function cmpVendorThenName(
+  a: { vendor_nama?: string; nama_project?: string },
+  b: { vendor_nama?: string; nama_project?: string },
+): number {
+  const va = (a.vendor_nama ?? '-').toLowerCase()
+  const vb = (b.vendor_nama ?? '-').toLowerCase()
+  if (va !== vb) return va < vb ? -1 : 1
+  return (a.nama_project ?? '').toLowerCase().localeCompare((b.nama_project ?? '').toLowerCase())
+}
+
+function buildGroupedMessage(header: string, groups: GroupBlock[], footer?: string): string {
+  const budget = 3800
+  let lines: string[] = [header]
+  let len = header.length + 1
+  let summarized = false
+  let no = 0
+  const tail: string[] = []
+
+  for (const g of groups) {
+    if (!summarized) {
+      const block = [SEP, `🏬 ${g.vendor} — ${g.items.length} job • ${fmtRupiah(g.subtotal)}`]
+      for (const it of g.items) {
+        no++
+        block.push(`   ${no}. ${it}`)
+      }
+      const blockLen = block.reduce((s, l) => s + l.length + 1, 0)
+      if (len + blockLen <= budget) {
+        lines.push(...block)
+        len += blockLen
+        continue
+      }
+      summarized = true
+    }
+    tail.push(`🏬 ${g.vendor} (+${g.items.length})`)
+  }
+
+  if (tail.length > 0) {
+    lines.push(SEP, `📌 Ringkasan sisa (${tail.length} vendor):`, ...tail)
+  }
+  if (footer) lines.push(SEP, footer)
+  return lines.join('\n')
+}
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return new Response('ok')
 
@@ -542,15 +591,28 @@ Deno.serve(async (req) => {
       await sendMessage(token, chatId, '🎉 Semua sudah lunas!')
       return new Response('ok')
     }
-    const lunasList = jobs.map((j) => ({
-      id: j.id,
-      nama_project: j.nama_project,
-      harga: j.harga,
-      vendor_nama: j.vendor?.nama ?? '-',
-    }))
-    const lines = lunasList.map(
-      (j, i) => `${i + 1}) ${j.nama_project} — ${j.vendor_nama} — ${fmtRupiah(j.harga)}`,
-    )
+    const lunasList = jobs
+      .map((j) => ({
+        id: j.id,
+        nama_project: j.nama_project,
+        harga: j.harga,
+        vendor_nama: j.vendor?.nama ?? '-',
+      }))
+      .sort(cmpVendorThenName)
+    const groups: GroupBlock[] = []
+    const byVendor = new Map<string, number>()
+    for (const j of lunasList) {
+      const key = j.vendor_nama || '-'
+      let gi = byVendor.get(key)
+      if (gi === undefined) {
+        gi = groups.length
+        byVendor.set(key, gi)
+        groups.push({ vendor: key, subtotal: 0, items: [] })
+      }
+      const g = groups[gi]
+      g.subtotal += j.harga ?? 0
+      g.items.push(`${j.nama_project} — ${fmtRupiah(j.harga)}`)
+    }
     await supabase
       .from('user_settings')
       .update({
@@ -562,7 +624,7 @@ Deno.serve(async (req) => {
     await sendMessage(
       token,
       chatId,
-      `💰 PILIH JOB LUNAS\n${SEP}\n${lines.join('\n')}\n${SEP}\nBalas nomor, atau /batal.`,
+      buildGroupedMessage(`✅ PILIH JOB LUNAS (${lunasList.length})`, groups, 'Balas nomor di atas, atau /batal.'),
     )
     return new Response('ok')
   }
@@ -660,13 +722,35 @@ async function handleQuery(
       await sendMessage(token, chatId, '🎉 Semua sudah lunas!')
       return
     }
-    const lines = jobs.map(
-      (j) => `💰 ${j.nama_project} — ${j.vendor?.nama ?? '-'} — ${fmtRupiah(j.harga)}`,
-    )
+    const flat = jobs.map((j) => ({
+      nama_project: j.nama_project,
+      harga: j.harga ?? 0,
+      vendor_nama: j.vendor?.nama ?? '-',
+    }))
+    flat.sort(cmpVendorThenName)
+    const groups: GroupBlock[] = []
+    const byVendor = new Map<string, number>()
+    for (const j of flat) {
+      const key = j.vendor_nama
+      let gi = byVendor.get(key)
+      if (gi === undefined) {
+        gi = groups.length
+        byVendor.set(key, gi)
+        groups.push({ vendor: key, subtotal: 0, items: [] })
+      }
+      const g = groups[gi]
+      g.subtotal += j.harga
+      g.items.push(`${j.nama_project} — ${fmtRupiah(j.harga)}`)
+    }
+    const grandTotal = groups.reduce((s, g) => s + g.subtotal, 0)
     await sendMessage(
       token,
       chatId,
-      `⏳ BELUM BAYAR (${jobs.length})\n${SEP}\n${lines.join('\n')}`,
+      buildGroupedMessage(
+        `🧾 BELUM BAYAR (${jobs.length})`,
+        groups,
+        `💰 TOTAL BELUM BAYAR\n   ${fmtRupiah(grandTotal)}`,
+      ),
     )
     return
   }
@@ -681,7 +765,7 @@ async function handleQuery(
 
   const { data: jobs, error } = await supabase
     .from('job')
-    .select('nama_project, deadline, vendor:vendor_id(nama)')
+    .select('nama_project, harga, deadline, vendor:vendor_id(nama)')
     .eq('user_id', user.user_id)
     .is('deleted_at', null)
     .not('deadline', 'is', null)
@@ -698,15 +782,38 @@ async function handleQuery(
     await sendMessage(token, chatId, '🎉 Tidak ada job mendekati deadline.')
     return
   }
-  const lines = jobs.map((j) => {
+  const flat = jobs.map((j) => ({
+    nama_project: j.nama_project,
+    harga: j.harga ?? 0,
+    vendor_nama: j.vendor?.nama ?? '-',
+    deadline: j.deadline,
+  }))
+  flat.sort(cmpVendorThenName)
+  const groups: GroupBlock[] = []
+  const byVendor = new Map<string, number>()
+  for (const j of flat) {
+    const key = j.vendor_nama
+    let gi = byVendor.get(key)
+    if (gi === undefined) {
+      gi = groups.length
+      byVendor.set(key, gi)
+      groups.push({ vendor: key, subtotal: 0, items: [] })
+    }
+    const g = groups[gi]
+    g.subtotal += j.harga
     const days = daysUntil(j.deadline ?? '')
     const label = days < 0 ? `Terlambat ${Math.abs(days)} hari` : days === 0 ? 'Hari ini' : days === 1 ? 'Besok' : `H-${days}`
-    return `• ${j.nama_project} — ${j.vendor?.nama ?? '-'} — ${formatDate(j.deadline)} (${label})`
-  })
+    g.items.push(`${j.nama_project} — ${formatDate(j.deadline)} (${label})`)
+  }
+  const grandTotal = groups.reduce((s, g) => s + g.subtotal, 0)
   await sendMessage(
     token,
     chatId,
-    `⏰ DEADLINE MENDEKAT (${jobs.length})\n${SEP}\n${lines.join('\n')}`,
+    buildGroupedMessage(
+      `⏰ DEADLINE MENDEKAT (${jobs.length})`,
+      groups,
+      `💰 TOTAL • ${fmtRupiah(grandTotal)}`,
+    ),
   )
 }
 

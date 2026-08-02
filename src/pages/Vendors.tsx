@@ -1,17 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { Plus, Pencil, Trash2, X, Phone } from 'lucide-react'
+import { useEffect, useState, useMemo, useRef, type FormEvent } from 'react'
+import { Plus, Search, Grid3x3, List, Phone, Pencil, MoreVertical, Trash2 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
-import { useAuth } from '../lib/AuthContext'
+import { useToast } from '../lib/ToastContext'
 import type { Vendor } from '../lib/types'
-import { rupiah, validateWhatsApp } from '../lib/utils'
+import { rupiah } from '../lib/utils'
 
-interface VendorStats extends Vendor {
-  total_job: number
-  total_pendapatan: number
-  total_piutang: number
-}
-
-const EMPTY = {
+const EMPTY_FORM = {
   nama: '',
   whatsapp: '',
   harga_kolase_sudah_pilih: 35000,
@@ -19,112 +13,146 @@ const EMPTY = {
   harga_edit_full: 135000,
 }
 
+const VENDOR_COLORS = ['bg-orange-600', 'bg-purple-600', 'bg-slate-900', 'bg-pink-500', 'bg-blue-600', 'bg-teal-600', 'bg-indigo-600']
+
 export default function Vendors() {
-  const { user } = useAuth()
-  const [vendors, setVendors] = useState<VendorStats[]>([])
+  const { toast, confirm } = useToast()
+  const [vendors, setVendors] = useState<Vendor[]>([])
+  const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [filterStatus, setFilterStatus] = useState('Semua Status')
+  const [sortOrder, setSortOrder] = useState('A - Z')
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<Vendor | null>(null)
-  const [form, setForm] = useState(EMPTY)
+  const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
+  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { loadData() }, [])
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        searchRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   async function loadData() {
     setLoading(true)
-
     const [vRes, jRes] = await Promise.all([
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
-      // Only fetch minimal columns needed for aggregation — no joins, no text
-      supabase.from('job').select('vendor_id, harga, status_bayar').is('deleted_at', null),
+      supabase.from('job').select('id, vendor_id, harga, status_edit, status_bayar').is('deleted_at', null),
     ])
-
-    const jobs = (jRes.data ?? []) as { vendor_id: string | null; harga: number; status_bayar: string }[]
-    const statsMap = new Map<string, { total_job: number; total_pendapatan: number; total_piutang: number }>()
-
-    for (const j of jobs) {
-      if (!j.vendor_id) continue
-      if (!statsMap.has(j.vendor_id)) statsMap.set(j.vendor_id, { total_job: 0, total_pendapatan: 0, total_piutang: 0 })
-      const s = statsMap.get(j.vendor_id)!
-      s.total_job++
-      if (j.status_bayar === 'Lunas') s.total_pendapatan += j.harga
-      else s.total_piutang += j.harga
-    }
-
-    const list = ((vRes.data ?? []) as Vendor[]).map((v) => ({
-      ...v,
-      ...(statsMap.get(v.id) ?? { total_job: 0, total_pendapatan: 0, total_piutang: 0 }),
-    }))
-    setVendors(list)
+    if (vRes.data) setVendors(vRes.data as Vendor[])
+    if (jRes.data) setJobs(jRes.data)
     setLoading(false)
   }
 
+  const vendorStats = useMemo(() => {
+    const map = new Map<string, { jobCount: number; pendapatan: number; outstanding: number; selesai: number }>()
+    for (const v of vendors) {
+      map.set(v.id, { jobCount: 0, pendapatan: 0, outstanding: 0, selesai: 0 })
+    }
+    for (const j of jobs) {
+      if (!j.vendor_id) continue
+      const stats = map.get(j.vendor_id)
+      if (!stats) continue
+      stats.jobCount++
+      if (j.status_bayar === 'Lunas') stats.pendapatan += j.harga
+      else stats.outstanding += j.harga
+      if (j.status_edit === 'Selesai') stats.selesai++
+    }
+    return map
+  }, [vendors, jobs])
+
+  const filtered = useMemo(() => {
+    let result = vendors
+    if (search) {
+      const q = search.toLowerCase()
+      result = result.filter((v) => v.nama.toLowerCase().includes(q) || v.whatsapp?.toLowerCase().includes(q))
+    }
+    if (filterStatus === 'Ada Piutang') {
+      result = result.filter((v) => (vendorStats.get(v.id)?.outstanding ?? 0) > 0)
+    } else if (filterStatus === 'Lunas Semua') {
+      result = result.filter((v) => (vendorStats.get(v.id)?.outstanding ?? 0) === 0)
+    }
+    if (sortOrder === 'A - Z') result = [...result].sort((a, b) => a.nama.localeCompare(b.nama))
+    else if (sortOrder === 'Z - A') result = [...result].sort((a, b) => b.nama.localeCompare(a.nama))
+    return result
+  }, [vendors, search, filterStatus, sortOrder, vendorStats])
+
+  const totalStats = useMemo(() => {
+    let totalJob = 0
+    let totalPendapatan = 0
+    let totalOutstanding = 0
+    let totalSelesai = 0
+    for (const stats of vendorStats.values()) {
+      totalJob += stats.jobCount
+      totalPendapatan += stats.pendapatan
+      totalOutstanding += stats.outstanding
+      totalSelesai += stats.selesai
+    }
+    const rataSelesai = totalJob > 0 ? (totalSelesai / totalJob) * 100 : 0
+    return { totalJob, totalPendapatan, totalOutstanding, rataSelesai }
+  }, [vendorStats])
+
   function openNew() {
     setEditing(null)
-    setForm(EMPTY)
+    setForm(EMPTY_FORM)
     setModal(true)
   }
 
-  function openEdit(v: Vendor) {
-    setEditing(v)
+  function openEdit(vendor: Vendor) {
+    setEditing(vendor)
     setForm({
-      nama: v.nama,
-      whatsapp: v.whatsapp ?? '',
-      harga_kolase_sudah_pilih: v.harga_kolase_sudah_pilih,
-      harga_kolase_belum_pilih: v.harga_kolase_belum_pilih,
-      harga_edit_full: v.harga_edit_full,
+      nama: vendor.nama,
+      whatsapp: vendor.whatsapp ?? '',
+      harga_kolase_sudah_pilih: vendor.harga_kolase_sudah_pilih,
+      harga_kolase_belum_pilih: vendor.harga_kolase_belum_pilih,
+      harga_edit_full: vendor.harga_edit_full,
     })
     setModal(true)
   }
 
   async function saveVendor(e: FormEvent) {
     e.preventDefault()
-    if (!user) return alert('Session tidak valid. Sila refresh halaman.')
-    if (!form.nama.trim()) return alert('Nama vendor wajib diisi.')
-    if (form.whatsapp && !validateWhatsApp(form.whatsapp)) {
-      return alert('Nomor WhatsApp tidak valid (10–15 digit).')
-    }
-    setSaving(true)
-
-    const payload = {
-      user_id: user.id,
-      nama: form.nama.trim(),
-      whatsapp: form.whatsapp.trim() || null,
-      harga_kolase_sudah_pilih: form.harga_kolase_sudah_pilih,
-      harga_kolase_belum_pilih: form.harga_kolase_belum_pilih,
-      harga_edit_full: form.harga_edit_full,
-      updated_at: new Date().toISOString(),
-    }
-
-    let error
-    if (editing) {
-      ;({ error } = await supabase.from('vendor').update(payload).eq('id', editing.id))
-    } else {
-      ;({ error } = await supabase.from('vendor').insert(payload))
-    }
-
-    if (error) alert('Gagal menyimpan: ' + error.message)
-    else {
-      setModal(false)
-      await loadData()
-    }
-    setSaving(false)
-  }
-
-  async function softDelete(v: VendorStats) {
-    if (v.total_job > 0) {
-      return alert(`Vendor masih memiliki ${v.total_job} job aktif. Pindahkan/hapus job dulu.`)
-    }
-    if (!confirm(`Hapus vendor "${v.nama}"?`)) return
-    const { error } = await supabase
-      .from('vendor')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', v.id)
-    if (error) {
-      alert('Gagal hapus: ' + error.message)
+    if (!form.nama) {
+      toast({ type: 'error', title: 'Nama vendor wajib diisi' })
       return
     }
-    await loadData()
+    setSaving(true)
+    const payload = { ...form, user_id: (await supabase.auth.getUser()).data.user?.id }
+    const { error } = editing
+      ? await supabase.from('vendor').update(payload).eq('id', editing.id)
+      : await supabase.from('vendor').insert([payload])
+    setSaving(false)
+    if (error) {
+      toast({ type: 'error', title: 'Gagal menyimpan', message: error.message })
+      return
+    }
+    toast({ type: 'success', title: editing ? 'Vendor diperbarui' : 'Vendor ditambahkan' })
+    setModal(false)
+    loadData()
+  }
+
+  async function deleteVendor(vendor: Vendor) {
+    const ok = await confirm({ title: 'Hapus vendor ini?', message: `"${vendor.nama}" akan dipindahkan ke Recycle Bin.`, confirmLabel: 'Hapus', danger: true })
+    if (!ok) return
+    const { error } = await supabase.from('vendor').update({ deleted_at: new Date().toISOString() }).eq('id', vendor.id)
+    if (error) {
+      toast({ type: 'error', title: 'Gagal menghapus', message: error.message })
+      return
+    }
+    toast({ type: 'success', title: 'Vendor dihapus' })
+    setMenuFor(null)
+    loadData()
   }
 
   if (loading) {
@@ -137,102 +165,305 @@ export default function Vendors() {
 
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Vendor</h1>
-          <p className="text-sm text-slate-500">{vendors.length} vendor</p>
-        </div>
-        <button onClick={openNew} className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-          <Plus className="w-4 h-4" /> Tambah
+      {/* Header */}
+      <div className="flex items-center justify-end">
+        <button onClick={openNew} className="btn-primary">
+          <Plus className="w-4 h-4" /> Tambah Vendor
         </button>
       </div>
 
-      {vendors.length === 0 ? (
-        <div className="text-center py-16 text-slate-400 text-sm">Belum ada vendor. Klik Tambah untuk mulai.</div>
-      ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {vendors.map((v) => (
-            <div key={v.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="font-semibold text-slate-800">{v.nama}</h3>
+      {/* Search + Filters + View Toggle */}
+      <div className="card p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 flex-1 min-w-[200px]">
+            <Search className="w-4 h-4 text-slate-400" />
+            <input
+              ref={searchRef}
+              type="text"
+              placeholder="Cari vendor..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 text-sm bg-transparent outline-none text-slate-900 placeholder:text-slate-400"
+            />
+            <kbd className="text-xs text-slate-400 border border-slate-200 rounded px-1.5 py-0.5">Ctrl + K</kbd>
+          </div>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
+            <option>Semua Status</option>
+            <option>Ada Piutang</option>
+            <option>Lunas Semua</option>
+          </select>
+          <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
+            <option>Urutkan: A - Z</option>
+            <option>Urutkan: Z - A</option>
+          </select>
+          <div className="flex items-center gap-1 border border-slate-200 rounded-lg p-1">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-rose-500 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              <Grid3x3 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-rose-500 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Vendor Grid */}
+      <div className={`${viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-3'}`}>
+        {filtered.map((v, idx) => {
+          const stats = vendorStats.get(v.id) ?? { jobCount: 0, pendapatan: 0, outstanding: 0, selesai: 0 }
+          const pct = stats.jobCount > 0 ? (stats.selesai / stats.jobCount) * 100 : 0
+          const color = VENDOR_COLORS[idx % VENDOR_COLORS.length]
+          const initials = v.nama.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+
+          if (viewMode === 'list') {
+            return (
+              <div key={v.id} className="card p-4 hover:shadow-md transition-shadow">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className={`w-10 h-10 rounded-full ${color} text-white flex items-center justify-center font-bold text-sm shrink-0`}>
+                    {initials}
+                  </div>
+                  <div className="flex-1 min-w-[160px]">
+                    <h3 className="font-bold text-slate-900 truncate">{v.nama}</h3>
+                    {v.whatsapp && (
+                      <div className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
+                        <Phone className="w-3 h-3" />
+                        <span>{v.whatsapp}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-6 text-center">
+                    <div>
+                      <div className="text-lg font-bold text-blue-600">{stats.jobCount}</div>
+                      <div className="text-xs text-slate-500">Job</div>
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-emerald-600">{rupiah(stats.pendapatan)}</div>
+                      <div className="text-xs text-slate-500">Pendapatan</div>
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-orange-600">{rupiah(stats.outstanding)}</div>
+                      <div className="text-xs text-slate-500">Piutang</div>
+                    </div>
+                    <div className="w-28">
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="text-slate-600">{pct.toFixed(0)}%</span>
+                        <span className="text-slate-600">{stats.selesai} / {stats.jobCount}</span>
+                      </div>
+                      <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => openEdit(v)} className="p-1 hover:bg-slate-100 rounded">
+                      <Pencil className="w-4 h-4 text-slate-400" />
+                    </button>
+                    <button onClick={() => deleteVendor(v)} className="p-1 hover:bg-slate-100 rounded">
+                      <Trash2 className="w-4 h-4 text-red-400" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          }
+
+          return (
+            <div key={v.id} className="card p-4 hover:shadow-md transition-shadow">
+              {/* Header */}
+              <div className="flex items-start gap-3 mb-4">
+                <div className={`w-11 h-11 rounded-full ${color} text-white flex items-center justify-center font-bold text-sm shrink-0`}>
+                  {initials}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-slate-900 truncate">{v.nama}</h3>
                   {v.whatsapp && (
-                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                      <Phone className="w-3 h-3" /> {v.whatsapp}
-                    </p>
+                    <div className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
+                      <Phone className="w-3 h-3" />
+                      <span>{v.whatsapp}</span>
+                    </div>
                   )}
                 </div>
-                <div className="flex gap-1">
-                  <button onClick={() => openEdit(v)} className="p-1.5 text-slate-400 hover:text-blue-600"><Pencil className="w-3.5 h-3.5" /></button>
-                  <button onClick={() => softDelete(v)} className="p-1.5 text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => openEdit(v)} className="p-1 hover:bg-slate-100 rounded">
+                    <Pencil className="w-4 h-4 text-slate-400" />
+                  </button>
+                  <div className="relative">
+                    <button onClick={() => setMenuFor(menuFor === v.id ? null : v.id)} className="p-1 hover:bg-slate-100 rounded">
+                      <MoreVertical className="w-4 h-4 text-slate-400" />
+                    </button>
+                    {menuFor === v.id && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setMenuFor(null)} />
+                        <div className="absolute right-0 top-9 z-50 bg-white border border-slate-200 rounded-xl shadow-lg py-1 w-40">
+                          <button
+                            onClick={() => { openEdit(v); setMenuFor(null) }}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                          >
+                            <Pencil className="w-4 h-4" /> Edit
+                          </button>
+                          <button
+                            onClick={() => deleteVendor(v)}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-4 h-4" /> Hapus
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-slate-50 rounded-lg py-2">
-                  <p className="text-lg font-bold text-slate-800">{v.total_job}</p>
-                  <p className="text-[10px] text-slate-400">Job</p>
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="text-center">
+                  <div className="text-lg font-bold text-blue-600">{stats.jobCount}</div>
+                  <div className="text-xs text-slate-500">Job</div>
                 </div>
-                <div className="bg-emerald-50 rounded-lg py-2">
-                  <p className="text-xs font-bold text-emerald-700 truncate px-1">{rupiah(v.total_pendapatan)}</p>
-                  <p className="text-[10px] text-slate-400">Pendapatan</p>
+                <div className="text-center">
+                  <div className="text-sm font-bold text-emerald-600">{rupiah(stats.pendapatan)}</div>
+                  <div className="text-xs text-slate-500">Pendapatan</div>
                 </div>
-                <div className="bg-amber-50 rounded-lg py-2">
-                  <p className="text-xs font-bold text-amber-700 truncate px-1">{rupiah(v.total_piutang)}</p>
-                  <p className="text-[10px] text-slate-400">Piutang</p>
+                <div className="text-center">
+                  <div className="text-sm font-bold text-orange-600">{rupiah(stats.outstanding)}</div>
+                  <div className="text-xs text-slate-500">Piutang</div>
                 </div>
               </div>
 
-              <div className="text-xs text-slate-400 space-y-0.5 border-t border-slate-100 pt-2">
-                <p>Kolase Sudah: {rupiah(v.harga_kolase_sudah_pilih)}</p>
-                <p>Kolase Belum: {rupiah(v.harga_kolase_belum_pilih)}</p>
-                <p>Edit Full: {rupiah(v.harga_edit_full)}</p>
+              {/* Progress */}
+              <div className="mb-4">
+                <div className="flex items-center justify-between text-sm mb-1">
+                  <span className="text-slate-600">{pct.toFixed(0)}% Selesai</span>
+                  <span className="text-slate-600">{stats.selesai} / {stats.jobCount} Job</span>
+                </div>
+                <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+
+              {/* Pricing */}
+              <div className="space-y-1.5 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">Kolase Sudah</span>
+                  <span className="font-semibold text-slate-900">{rupiah(v.harga_kolase_sudah_pilih)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">Kolase Belum</span>
+                  <span className="font-semibold text-slate-900">{rupiah(v.harga_kolase_belum_pilih)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600">Edit Full</span>
+                  <span className="font-semibold text-slate-900">{rupiah(v.harga_edit_full)}</span>
+                </div>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          )
+        })}
 
-      {modal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4">
-          <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 sticky top-0 bg-white">
-              <h2 className="font-semibold text-slate-800">{editing ? 'Edit Vendor' : 'Tambah Vendor'}</h2>
-              <button onClick={() => setModal(false)} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        {/* Empty state / Add button */}
+        {filtered.length < 6 && (
+          <div className="card p-8 flex flex-col items-center justify-center text-center border-dashed hover:border-rose-300 hover:bg-rose-50/30 cursor-pointer transition-colors" onClick={openNew}>
+            <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-500 flex items-center justify-center mb-3">
+              <Plus className="w-8 h-8" />
             </div>
-            <form onSubmit={saveVendor} className="p-5 space-y-4 pb-16 sm:pb-5">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Nama Vendor</label>
-                <input required value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} className={inputCls} placeholder="Nama studio / vendor" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">WhatsApp</label>
-                <input value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} className={inputCls} placeholder="08xxxxxxxxxx" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Harga Kolase Sudah Pilih</label>
-                <input type="number" min={0} value={form.harga_kolase_sudah_pilih} onChange={(e) => setForm({ ...form, harga_kolase_sudah_pilih: Number(e.target.value) })} className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Harga Kolase Belum Pilih</label>
-                <input type="number" min={0} value={form.harga_kolase_belum_pilih} onChange={(e) => setForm({ ...form, harga_kolase_belum_pilih: Number(e.target.value) })} className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Harga Edit Full</label>
-                <input type="number" min={0} value={form.harga_edit_full} onChange={(e) => setForm({ ...form, harga_edit_full: Number(e.target.value) })} className={inputCls} />
-              </div>
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setModal(false)} className="flex-1 border border-slate-300 text-slate-600 rounded-lg py-2.5 text-sm font-medium hover:bg-slate-50">Batal</button>
-                <button type="submit" disabled={saving} className="flex-1 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white rounded-lg py-2.5 text-sm font-medium">
-                  {saving ? 'Menyimpan...' : 'Simpan'}
-                </button>
-              </div>
-            </form>
+            <h3 className="font-bold text-slate-900 mb-1">Tambah Vendor</h3>
+            <p className="text-sm text-slate-500 mb-3">Kelola vendor baru dengan mudah</p>
+            <button className="text-sm text-rose-600 hover:text-rose-700 font-medium flex items-center gap-1">
+              <Plus className="w-4 h-4" /> Tambah Vendor
+            </button>
           </div>
+        )}
+      </div>
+
+      {/* Footer Stats */}
+      <div className="card p-5">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
+          <div>
+            <p className="text-sm text-slate-500 mb-1">Total Vendor</p>
+            <p className="text-lg font-bold text-slate-900">{vendors.length} vendor</p>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500 mb-1">Total Job</p>
+            <p className="text-lg font-bold text-slate-900">{totalStats.totalJob} Job</p>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500 mb-1">Total Pendapatan</p>
+            <p className="text-lg font-bold text-emerald-600">{rupiah(totalStats.totalPendapatan)}</p>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500 mb-1">Total Piutang</p>
+            <p className="text-lg font-bold text-rose-600">{rupiah(totalStats.totalOutstanding)}</p>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="relative w-16 h-16">
+              <svg className="w-16 h-16 transform -rotate-90">
+                <circle cx="32" cy="32" r="28" fill="none" stroke="#e2e8f0" strokeWidth="6" />
+                <circle
+                  cx="32"
+                  cy="32"
+                  r="28"
+                  fill="none"
+                  stroke="#3b82f6"
+                  strokeWidth="6"
+                  strokeDasharray={`${28 * 2 * Math.PI * (totalStats.rataSelesai / 100)} ${28 * 2 * Math.PI}`}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-base font-bold text-slate-900">{totalStats.rataSelesai.toFixed(0)}%</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-slate-500">Rata-rata Selesai</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Modal */}
+      {modal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <form onSubmit={saveVendor} className="card p-5 w-full max-w-lg">
+            <h2 className="text-base font-bold text-slate-900 mb-4">{editing ? 'Edit Vendor' : 'Tambah Vendor'}</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Nama Vendor</label>
+                <input type="text" value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required className="input-base" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp</label>
+                <input type="text" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} className="input-base" placeholder="08xx xxxx xxxx" />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Kolase Sudah</label>
+                  <input type="number" value={form.harga_kolase_sudah_pilih} onChange={(e) => setForm({ ...form, harga_kolase_sudah_pilih: Number(e.target.value) })} className="input-base" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Kolase Belum</label>
+                  <input type="number" value={form.harga_kolase_belum_pilih} onChange={(e) => setForm({ ...form, harga_kolase_belum_pilih: Number(e.target.value) })} className="input-base" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Edit Full</label>
+                  <input type="number" value={form.harga_edit_full} onChange={(e) => setForm({ ...form, harga_edit_full: Number(e.target.value) })} className="input-base" />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button type="button" onClick={() => setModal(false)} className="flex-1 btn-secondary justify-center">Batal</button>
+              <button type="submit" disabled={saving} className="flex-1 btn-primary justify-center">
+                {saving ? 'Menyimpan...' : 'Simpan'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
   )
 }
-
-const inputCls = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent'

@@ -24,55 +24,55 @@ export default function ForgotPassword() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-rose-900 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-rose-600 mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-rose-500 to-orange-400 shadow-xl shadow-rose-500/30 mb-4">
             <Camera className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white">SiEdit</h1>
+          <h1 className="text-3xl font-extrabold text-white">SiEdit</h1>
           <p className="text-slate-400 mt-1">Wedding Job Tracker</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl p-8 space-y-5">
-          <h2 className="text-xl font-semibold text-slate-800">Lupa Password</h2>
+        <form onSubmit={handleSubmit} className="bg-white/90 backdrop-blur rounded-2xl border border-slate-300 shadow-2xl shadow-black/50 p-8 space-y-5">
+          <h2 className="text-xl font-bold text-slate-900">Lupa Password</h2>
 
           {error && (
-            <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-3">{error}</div>
+            <div className="bg-red-500/10 text-red-300 border border-red-500/25 text-sm rounded-xl px-4 py-3">{error}</div>
           )}
 
           {sent ? (
             <div className="space-y-3">
-              <div className="bg-green-50 text-green-700 text-sm rounded-lg px-4 py-3">
+              <div className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 text-sm rounded-xl px-4 py-3">
                 Tautan reset password telah dikirim ke <strong>{email.trim()}</strong>. Silakan cek inbox (dan folder spam) Anda.
               </div>
               <Link
                 to="/login"
-                className="block text-center text-sm text-rose-600 font-medium hover:underline"
+                className="block text-center text-sm text-rose-400 font-medium hover:underline"
               >
                 Kembali ke Login
               </Link>
             </div>
           ) : (
             <>
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-slate-600">
                 Masukkan email terdaftar Anda. Kami akan mengirim tautan untuk mengatur password baru.
               </p>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Email</label>
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent"
+                  className="input-base"
                   placeholder="nama@email.com"
                 />
               </div>
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-medium rounded-lg py-2.5 text-sm transition-colors flex items-center justify-center gap-2"
+                className="w-full btn-primary justify-center py-2.5"
               >
                 <Mail className="w-4 h-4" />
                 {submitting ? 'Mengirim...' : 'Kirim Tautan Reset'}
@@ -81,9 +81,9 @@ export default function ForgotPassword() {
           )}
 
           {!sent && (
-            <p className="text-center text-sm text-slate-500">
+            <p className="text-center text-sm text-slate-600">
               Ingat password?{' '}
-              <Link to="/login" className="text-rose-600 font-medium hover:underline">
+              <Link to="/login" className="text-rose-400 font-medium hover:underline">
                 Masuk
               </Link>
             </p>

@@ -20,3 +20,4 @@ npm-debug.log*
 *.rar
 node_modules.rar
 .vercel
+.env*

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Plus, Printer, Trash2, History } from 'lucide-react'
+import { Plus, Printer, Trash2, History, ReceiptText, CheckCircle2, Clock3 } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
+import { useToast } from '../lib/ToastContext'
 import type { Vendor, Job, Invoice, InvoiceItem } from '../lib/types'
 import { rupiah, formatDate, todayStr } from '../lib/utils'
 
 export default function Invoices() {
   const { user } = useAuth()
+  const { toast, confirm } = useToast()
 
   const [tab, setTab] = useState<'buat' | 'riwayat'>('buat')
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -93,8 +95,11 @@ export default function Invoices() {
   const selectedJobs = unpaidJobs.filter((j) => checked.has(j.id))
   const total = selectedJobs.reduce((s, j) => s + j.harga, 0)
 
+  const totalLunas = invoices.filter((i) => i.status_bayar === 'Lunas').reduce((s, i) => s + i.total, 0)
+  const totalPiutang = invoices.filter((i) => i.status_bayar !== 'Lunas').reduce((s, i) => s + i.total, 0)
+
   async function generateInvoice() {
-    if (selectedJobs.length === 0) return alert('Pilih minimal 1 job.')
+    if (selectedJobs.length === 0) return toast({ type: 'error', title: 'Pilih minimal 1 job.' })
     setGenerating(true)
 
     const vendor = vendors.find((v) => v.id === selectedVendor)
@@ -123,7 +128,7 @@ export default function Invoices() {
     })
 
     if (error) {
-      alert('Gagal membuat invoice: ' + error.message)
+      toast({ type: 'error', title: 'Gagal membuat invoice', message: error.message })
       setGenerating(false)
       return
     }
@@ -137,6 +142,7 @@ export default function Invoices() {
     setTab('riwayat')
     await loadInitial()
     setGenerating(false)
+    toast({ type: 'success', title: 'Invoice dibuat', message: `${invNumber} untuk ${vendor?.nama ?? ''}` })
   }
   function printInvoice(
     number: string,
@@ -197,7 +203,7 @@ export default function Invoices() {
       .update({ status_bayar: newStatus, user_id: user!.id })
       .eq('id', inv.id)
 
-    if (invErr) return alert('Gagal update invoice: ' + invErr.message)
+    if (invErr) return toast({ type: 'error', title: 'Gagal update invoice', message: invErr.message })
 
     // Sync jobs by ID (reliable - no name collision)
     const jobUpdate: Record<string, unknown> = {
@@ -214,21 +220,24 @@ export default function Invoices() {
       .in('id', jobIds)
       .is('deleted_at', null)
 
-    if (jobErr) alert('Invoice diupdate, tapi gagal sync job: ' + jobErr.message)
+    if (jobErr) toast({ type: 'error', title: 'Invoice diupdate, tapi gagal sync job', message: jobErr.message })
+    else toast({ type: 'success', title: `Invoice ditandai ${newStatus}` })
 
     await loadInitial()
   }
 
   async function softDelete(id: string) {
-    if (!confirm('Hapus invoice ini?')) return
+    const ok = await confirm({ title: 'Hapus invoice ini?', confirmLabel: 'Hapus', danger: true })
+    if (!ok) return
     const { error } = await supabase
       .from('invoice')
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', id)
     if (error) {
-      alert('Gagal hapus: ' + error.message)
+      toast({ type: 'error', title: 'Gagal hapus', message: error.message })
       return
     }
+    toast({ type: 'success', title: 'Invoice dihapus' })
     await loadInitial()
   }
 
@@ -252,36 +261,38 @@ export default function Invoices() {
   }
 
   return (
-    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Invoice</h1>
-        <p className="text-sm text-slate-500">Buat dan kelola invoice per vendor</p>
+    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-5">
+      {/* Summary strip */}
+      <div className="grid grid-cols-3 gap-3 md:gap-4">
+        <SummaryCard icon={ReceiptText} label="Total Invoice" value={String(invoices.length)} gradient="from-sky-500 to-indigo-500" />
+        <SummaryCard icon={Clock3} label="Piutang" value={rupiah(totalPiutang)} gradient="from-amber-500 to-orange-500" small />
+        <SummaryCard icon={CheckCircle2} label="Lunas" value={rupiah(totalLunas)} gradient="from-emerald-500 to-teal-500" small />
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+      <div className="flex gap-1 bg-slate-50 border border-slate-300 rounded-xl p-1 w-fit">
         <button
           onClick={() => setTab('buat')}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === 'buat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${tab === 'buat' ? 'bg-rose-500/15 text-rose-300 shadow-inner' : 'text-slate-500 hover:text-slate-900'}`}
         >
           <Plus className="w-4 h-4" /> Buat Invoice
         </button>
         <button
           onClick={() => setTab('riwayat')}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === 'riwayat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${tab === 'riwayat' ? 'bg-rose-500/15 text-rose-300 shadow-inner' : 'text-slate-500 hover:text-slate-900'}`}
         >
           <History className="w-4 h-4" /> Riwayat
         </button>
       </div>
 
       {tab === 'buat' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+        <div className="card p-5 space-y-4">
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Pilih Vendor</label>
             <select
               value={selectedVendor}
               onChange={(e) => loadUnpaid(e.target.value)}
-              className="w-full sm:w-80 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+              className="input-base sm:w-80"
             >
               <option value="">-- Pilih vendor --</option>
               {vendors.map((v) => (
@@ -291,38 +302,43 @@ export default function Invoices() {
           </div>
 
           {selectedVendor && unpaidJobs.length === 0 && (
-            <p className="text-sm text-slate-400 py-4 text-center">Tidak ada job belum bayar untuk vendor ini.</p>
+            <div className="py-10 text-center">
+              <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-slate-50 mx-auto">
+                <CheckCircle2 className="w-6 h-6 text-slate-500" />
+              </div>
+              <p className="text-sm text-slate-500 mt-3">Tidak ada job belum bayar untuk vendor ini.</p>
+            </div>
           )}
 
           {unpaidJobs.length > 0 && (
             <>
-              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+              <div className="divide-y divide-slate-200 border border-slate-300 rounded-xl overflow-hidden">
                 {unpaidJobs.map((j) => (
-                  <label key={j.id} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer">
+                  <label key={j.id} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 cursor-pointer transition-colors">
                     <input
                       type="checkbox"
                       checked={checked.has(j.id)}
                       onChange={() => toggleJob(j.id)}
-                      className="w-4 h-4 rounded accent-rose-600"
+                      className="w-4 h-4 rounded accent-rose-500"
                     />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-800 truncate">{j.nama_project}</p>
-                      <p className="text-xs text-slate-400">{j.jenis_edit}</p>
+                      <p className="text-sm font-medium text-slate-900 truncate">{j.nama_project}</p>
+                      <p className="text-xs text-slate-500">{j.jenis_edit}</p>
                     </div>
-                    <span className="text-sm font-medium text-slate-700 shrink-0">{rupiah(j.harga)}</span>
+                    <span className="text-sm font-medium text-slate-600 shrink-0">{rupiah(j.harga)}</span>
                   </label>
                 ))}
               </div>
 
-              <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center justify-between pt-2 flex-wrap gap-3">
                 <div>
-                  <p className="text-xs text-slate-400">{selectedJobs.length} item dipilih</p>
-                  <p className="text-lg font-bold text-slate-800">{rupiah(total)}</p>
+                  <p className="text-xs text-slate-500">{selectedJobs.length} item dipilih</p>
+                  <p className="text-xl font-extrabold text-slate-900">{rupiah(total)}</p>
                 </div>
                 <button
                   onClick={generateInvoice}
                   disabled={generating || selectedJobs.length === 0}
-                  className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
+                  className="btn-primary"
                 >
                   <Printer className="w-4 h-4" />
                   {generating ? 'Membuat...' : 'Buat & Cetak Invoice'}
@@ -336,36 +352,47 @@ export default function Invoices() {
       {tab === 'riwayat' && (
         <div className="space-y-3">
           {invoices.length === 0 ? (
-            <p className="text-center py-16 text-slate-400 text-sm">Belum ada invoice.</p>
+            <div className="card p-16 text-center">
+              <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-500 shadow-lg shadow-sky-500/30 mx-auto">
+                <ReceiptText className="w-7 h-7 text-white" />
+              </div>
+              <p className="text-slate-900 font-medium mt-4">Belum ada invoice.</p>
+              <p className="text-sm text-slate-500 mt-1">Buat invoice pertama Anda dari tab "Buat Invoice".</p>
+            </div>
           ) : (
             <>
               {invoices.map((inv) => {
                 const items: InvoiceItem[] = JSON.parse(inv.items_json)
                 return (
-                  <div key={inv.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-sm text-slate-800">{inv.vendor_nama}</h3>
-                        <button
-                          onClick={() => toggleStatus(inv)}
-                          className={`text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer ${
-                            inv.status_bayar === 'Lunas'
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                          }`}
-                        >
-                          {inv.status_bayar}
-                        </button>
+                  <div key={inv.id} className="card card-hover p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-orange-400 text-white shadow-md shadow-rose-500/30 shrink-0">
+                        <ReceiptText className="w-5 h-5" />
                       </div>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {formatDate(inv.tanggal)} · {items.length} item · {rupiah(inv.total)}
-                      </p>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-sm text-slate-900 truncate">{inv.vendor_nama}</h3>
+                          <button
+                            onClick={() => toggleStatus(inv)}
+                            className={`badge cursor-pointer border ${
+                              inv.status_bayar === 'Lunas'
+                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/20'
+                                : 'bg-amber-500/10 text-amber-300 border-amber-500/20 hover:bg-amber-500/20'
+                            }`}
+                          >
+                            {inv.status_bayar}
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">
+                          {formatDate(inv.tanggal)} · {items.length} item · <span className="font-semibold text-slate-600">{rupiah(inv.total)}</span>
+                        </p>
+                      </div>
                     </div>
                     <div className="flex gap-2 shrink-0">
-                      <button onClick={() => reprint(inv)} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium px-3 py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50">
+                      <button onClick={() => reprint(inv)} className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 font-semibold px-3 py-1.5 border border-sky-500/25 rounded-lg hover:bg-sky-500/10 transition-colors">
                         <Printer className="w-3.5 h-3.5" /> Cetak
                       </button>
-                      <button onClick={() => softDelete(inv.id)} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-medium px-3 py-1.5 border border-red-200 rounded-lg hover:bg-red-50">
+                      <button onClick={() => softDelete(inv.id)} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 font-semibold px-3 py-1.5 border border-red-500/25 rounded-lg hover:bg-red-500/10 transition-colors">
                         <Trash2 className="w-3.5 h-3.5" /> Hapus
                       </button>
                     </div>
@@ -376,7 +403,7 @@ export default function Invoices() {
                 <button
                   onClick={loadMoreRiwayat}
                   disabled={riwayatLoading}
-                  className="w-full py-3 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 font-medium transition-colors disabled:opacity-60"
+                  className="w-full py-3 text-sm text-slate-500 hover:text-slate-900 bg-white hover:bg-slate-50 rounded-xl border border-slate-300 font-semibold transition-colors disabled:opacity-60"
                 >
                   {riwayatLoading ? 'Memuat...' : 'Muat Lainnya'}
                 </button>
@@ -385,6 +412,20 @@ export default function Invoices() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function SummaryCard({ icon: Icon, label, value, gradient, small }: { icon: React.ElementType; label: string; value: string; gradient: string; small?: boolean }) {
+  return (
+    <div className="card card-hover p-4 flex items-center gap-3">
+      <div className={`kpi-chip bg-gradient-to-br ${gradient} !w-10 !h-10 !rounded-xl`}>
+        <Icon className="w-5 h-5" />
+      </div>
+      <div className="min-w-0">
+        <p className="micro-label">{label}</p>
+        <p className={`font-extrabold text-slate-900 mt-0.5 truncate ${small ? 'text-sm' : 'text-base'}`}>{value}</p>
+      </div>
     </div>
   )
 }

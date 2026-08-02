@@ -15,6 +15,10 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
+const PREVIEW_MODE = import.meta.env.VITE_PREVIEW_MODE === 'true'
+const DEMO_EMAIL = import.meta.env.VITE_DEMO_EMAIL as string | undefined
+const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD as string | undefined
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -24,8 +28,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const isOAuthCallback = hash.includes('access_token=') || hash.includes('code=')
 
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (!isOAuthCallback) setLoading(false)
+      if (session) {
+        setUser(session.user)
+        if (!isOAuthCallback) setLoading(false)
+        return
+      }
+      if (PREVIEW_MODE && DEMO_EMAIL && DEMO_PASSWORD) {
+        supabase.auth.signInWithPassword({ email: DEMO_EMAIL, password: DEMO_PASSWORD })
+          .then(({ data: { session: s }, error }) => {
+            setUser(s?.user ?? null)
+            if (error) console.warn('[preview] demo login gagal:', error.message)
+          })
+          .finally(() => setLoading(false))
+      } else {
+        setLoading(false)
+      }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {

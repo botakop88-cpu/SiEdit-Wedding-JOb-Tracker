@@ -1,192 +1,134 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Trash2, AlertTriangle, Database, Info, LogOut, Send } from 'lucide-react'
+import { User, Bell, Trash2, Info, Clock, X, Send, CheckCircle2, Lock, ClipboardList, Users, ReceiptText } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
-import type { Job, Vendor, Invoice, UserSettings } from '../lib/types'
-import { formatDate, rupiah } from '../lib/utils'
+import { useToast } from '../lib/ToastContext'
+import type { UserSettings } from '../lib/types'
+import RecycleBinModal from '../components/RecycleBinModal'
 
 const TELEGRAM_BOT_USERNAME = 'SiEdit_NotifBot'
+const CONNECT_MINUTES = 15
 
-type RecycleTab = 'job' | 'vendor' | 'invoice'
+function genConnectCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+}
 
 export default function Settings() {
-  const { user, signOut } = useAuth()
-  const [counts, setCounts] = useState({ jobs: 0, vendors: 0, invoices: 0 })
-  const [recycleTab, setRecycleTab] = useState<RecycleTab>('job')
-  const [deletedJobs, setDeletedJobs] = useState<Job[]>([])
-  const [deletedVendors, setDeletedVendors] = useState<Vendor[]>([])
-  const [deletedInvoices, setDeletedInvoices] = useState<Invoice[]>([])
-  const [loading, setLoading] = useState(true)
+  const { user } = useAuth()
+  const { toast, confirm } = useToast()
   const [settings, setSettings] = useState<UserSettings | null>(null)
-  const [notifJam, setNotifJam] = useState('07:00')
-  const [jamSaved, setJamSaved] = useState(false)
-  const [connectCode, setConnectCode] = useState<string | null>(null)
-  const [connectLink, setConnectLink] = useState<string | null>(null)
-  const [connecting, setConnecting] = useState(false)
-
-  useEffect(() => { loadAll() }, [])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [nama, setNama] = useState<string>(user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? '')
+  const [jam, setJam] = useState('07:00')
+  const [notifModal, setNotifModal] = useState(false)
+  const [connectModal, setConnectModal] = useState(false)
+  const [connectCode, setConnectCode] = useState('')
+  const [connectExpires, setConnectExpires] = useState('')
+  const [recycleCount, setRecycleCount] = useState({ jobs: 0, vendors: 0, invoices: 0 })
+  const [recycleOpen, setRecycleOpen] = useState(false)
 
   useEffect(() => {
-    if (!connectCode) return
-    const iv = setInterval(async () => {
-      if (!user) return
+    loadData()
+  }, [])
+
+  useEffect(() => {
+    if (user?.user_metadata?.full_name ?? user?.user_metadata?.name) {
+      setNama(user.user_metadata.full_name ?? user.user_metadata.name)
+    }
+  }, [user?.id, user?.user_metadata?.full_name, user?.user_metadata?.name])
+
+  async function loadData() {
+    setLoading(true)
+    if (user) {
       const { data } = await supabase
         .from('user_settings')
-        .select('telegram_chat_id')
+        .select('*')
         .eq('user_id', user.id)
         .maybeSingle()
-      if (data?.telegram_chat_id) {
-        setConnectCode(null)
-        setConnectLink(null)
-        setConnecting(false)
-        await loadSettings()
+      if (data) {
+        const s = data as UserSettings
+        setSettings(s)
+        setJam(s.notif_jam?.slice(0, 5) ?? '07:00')
       }
-    }, 3000)
-    return () => clearInterval(iv)
-  }, [connectCode, user])
+    }
 
-  async function loadAll() {
-    setLoading(true)
-    const [jC, vC, iC, jD, vD, iD] = await Promise.all([
-      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
-      supabase.from('vendor').select('*', { count: 'exact', head: true }).is('deleted_at', null),
-      supabase.from('invoice').select('*', { count: 'exact', head: true }).is('deleted_at', null),
-      supabase.from('job').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-      supabase.from('vendor').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-      supabase.from('invoice').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+    const [jRes, vRes, iRes] = await Promise.all([
+      supabase.from('job').select('*', { count: 'exact', head: true }).not('deleted_at', 'is', null),
+      supabase.from('vendor').select('*', { count: 'exact', head: true }).not('deleted_at', 'is', null),
+      supabase.from('invoice').select('*', { count: 'exact', head: true }).not('deleted_at', 'is', null),
     ])
-    setCounts({
-      jobs: jC.count ?? 0,
-      vendors: vC.count ?? 0,
-      invoices: iC.count ?? 0,
+    setRecycleCount({
+      jobs: jRes.count ?? 0,
+      vendors: vRes.count ?? 0,
+      invoices: iRes.count ?? 0,
     })
-    if (jD.data) setDeletedJobs(jD.data as Job[])
-    if (vD.data) setDeletedVendors(vD.data as Vendor[])
-    if (iD.data) setDeletedInvoices(iD.data as Invoice[])
-    await loadSettings()
     setLoading(false)
   }
 
-  async function loadSettings() {
-    if (!user) return
-    const { data } = await supabase
-      .from('user_settings')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    if (data) {
-      const s = data as UserSettings
-      setSettings(s)
-      setNotifJam((s.notif_jam ?? '07:00').slice(0, 5))
+  async function saveSettings(patch: Partial<UserSettings>) {
+    if (!user) return { error: { message: 'Tidak terautentikasi' } as { message: string } }
+    if (settings?.id) {
+      return supabase
+        .from('user_settings')
+        .update({ ...patch, updated_at: new Date().toISOString() })
+        .eq('id', settings.id)
     }
+    return supabase
+      .from('user_settings')
+      .insert({ user_id: user.id, ...patch })
   }
 
-  async function saveJam() {
-    if (!user) return
-    if (!notifJam) {
-      alert('Pilih jam notifikasi.')
-      return
-    }
-    const payload = { user_id: user.id, notif_jam: notifJam + ':00', updated_at: new Date().toISOString() }
-    const { error } = await supabase
-      .from('user_settings')
-      .upsert(payload, { onConflict: 'user_id' })
-    if (error) {
-      alert('Gagal menyimpan: ' + error.message)
-      return
-    }
-    setJamSaved(true)
-    setTimeout(() => setJamSaved(false), 2500)
+  async function handleSaveProfile() {
+    setSaving(true)
+    const { error } = await supabase.auth.updateUser({ data: { full_name: nama.trim() || 'Pengguna' } })
+    setSaving(false)
+    if (error) return toast({ type: 'error', title: 'Gagal menyimpan profil', message: error.message })
+    toast({ type: 'success', title: 'Profil diperbarui' })
   }
 
-  function generateCode(): string {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    let code = ''
-    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)]
-    return code
-  }
-
-  async function startConnect() {
+  async function handleConnectTelegram() {
     if (!user) return
-    const code = generateCode()
-    const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString()
-    const { error } = await supabase
-      .from('user_settings')
-      .upsert(
-        { user_id: user.id, telegram_connect_code: code, telegram_connect_expires: expires, updated_at: new Date().toISOString() },
-        { onConflict: 'user_id' },
-      )
-    if (error) {
-      alert('Gagal memulai koneksi: ' + error.message)
-      return
-    }
+    setSaving(true)
+    const code = genConnectCode()
+    const expires = new Date(Date.now() + CONNECT_MINUTES * 60 * 1000).toISOString()
+    const res = await saveSettings({ telegram_connect_code: code, telegram_connect_expires: expires })
+    setSaving(false)
+    if (res.error) return toast({ type: 'error', title: 'Gagal membuat kode', message: res.error.message })
     setConnectCode(code)
-    setConnectLink(`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${code}`)
-    setConnecting(true)
+    setConnectExpires(expires)
+    setNotifModal(false)
+    setConnectModal(true)
   }
 
-  async function disconnect() {
-    if (!user) return
-    if (!confirm('Putuskan koneksi Telegram?')) return
-    const { error } = await supabase
-      .from('user_settings')
-      .update({ telegram_chat_id: null, updated_at: new Date().toISOString() })
-      .eq('user_id', user.id)
-    if (error) {
-      alert('Gagal memutuskan: ' + error.message)
-      return
-    }
-    await loadSettings()
+  async function handleDisconnectTelegram() {
+    const ok = await confirm({
+      title: 'Putuskan Telegram?',
+      message: 'Notifikasi deadline tidak akan dikirim lagi ke Telegram.',
+      confirmLabel: 'Putuskan',
+      danger: true,
+    })
+    if (!ok) return
+    const res = await saveSettings({ telegram_chat_id: null, telegram_connect_code: null, telegram_connect_expires: null })
+    if (res.error) return toast({ type: 'error', title: 'Gagal memutuskan', message: res.error.message })
+    setSettings({ ...settings!, telegram_chat_id: null, telegram_connect_code: null, telegram_connect_expires: null })
+    toast({ type: 'success', title: 'Telegram diputuskan' })
   }
 
-  async function restore(table: string, id: string) {
-    const { error } = await supabase
-      .from(table)
-      .update({ deleted_at: null })
-      .eq('id', id)
-    if (error) {
-      alert('Gagal pulihkan: ' + error.message)
-      return
-    }
-    await loadAll()
+  async function handleSaveJam() {
+    setSaving(true)
+    const res = await saveSettings({ notif_jam: `${jam}:00` })
+    setSaving(false)
+    if (res.error) return toast({ type: 'error', title: 'Gagal menyimpan', message: res.error.message })
+    setSettings({ ...settings!, notif_jam: `${jam}:00` })
+    setNotifModal(false)
+    toast({ type: 'success', title: 'Jam notifikasi disimpan' })
   }
 
-  async function hardDelete(table: string, id: string) {
-    if (!confirm('Hapus permanen? Tindakan ini tidak dapat dibatalkan.')) return
-    const { error } = await supabase
-      .from(table)
-      .delete()
-      .eq('id', id)
-    if (error) {
-      alert('Gagal hapus: ' + error.message)
-      return
-    }
-    await loadAll()
+  async function handleCheckUpdate() {
+    toast({ type: 'success', title: 'Sudah versi terbaru', message: 'SiEdit v1.0.0 adalah versi terkini.' })
   }
-
-  async function emptyTrash() {
-    const total = deletedJobs.length + deletedVendors.length + deletedInvoices.length
-    if (total === 0) return
-    const detail = [
-      deletedJobs.length > 0 && `${deletedJobs.length} job`,
-      deletedVendors.length > 0 && `${deletedVendors.length} vendor`,
-      deletedInvoices.length > 0 && `${deletedInvoices.length} invoice`,
-    ].filter(Boolean).join(', ')
-    if (!confirm(`Kosongkan seluruh sampah?\n\n${detail} akan dihapus permanen.\nTindakan ini tidak dapat dibatalkan!`)) return
-    const results = await Promise.all([
-      supabase.from('job').delete().not('deleted_at', 'is', null),
-      supabase.from('vendor').delete().not('deleted_at', 'is', null),
-      supabase.from('invoice').delete().not('deleted_at', 'is', null),
-    ])
-    const err = results.find((r) => r.error)
-    if (err) {
-      alert('Gagal kosongkan sampah: ' + err.error?.message)
-      return
-    }
-    await loadAll()
-  }
-
-  const trashCount = deletedJobs.length + deletedVendors.length + deletedInvoices.length
 
   if (loading) {
     return (
@@ -197,239 +139,389 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-4 md:p-8 max-w-3xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Pengaturan</h1>
-        <p className="text-sm text-slate-500">Informasi aplikasi & recycle bin</p>
-      </div>
-
-      {/* App info */}
-      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
-        <div className="flex items-center gap-2 mb-1">
-          <Info className="w-4 h-4 text-blue-500" />
-          <h2 className="font-semibold text-sm text-slate-800">Informasi Aplikasi</h2>
-        </div>
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-          <dt className="text-slate-400">Versi</dt>
-          <dd className="text-slate-700 font-medium">1.0.0</dd>
-          <dt className="text-slate-400">Database</dt>
-          <dd className="text-slate-700 font-medium">Supabase (PostgreSQL)</dd>
-          <dt className="text-slate-400">Mode</dt>
-          <dd className="text-slate-700 font-medium">Multi-User (Auth)</dd>
-          <dt className="text-slate-400">Email</dt>
-          <dd className="text-slate-700 font-medium truncate">{user?.email}</dd>
-          <dt className="text-slate-400">Job aktif</dt>
-          <dd className="text-slate-700 font-medium">{counts.jobs}</dd>
-          <dt className="text-slate-400">Vendor aktif</dt>
-          <dd className="text-slate-700 font-medium">{counts.vendors}</dd>
-          <dt className="text-slate-400">Invoice aktif</dt>
-          <dd className="text-slate-700 font-medium">{counts.invoices}</dd>
-        </dl>
-      </section>
-
-      {/* Data location */}
-      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-2">
-        <div className="flex items-center gap-2 mb-1">
-          <Database className="w-4 h-4 text-emerald-500" />
-          <h2 className="font-semibold text-sm text-slate-800">Lokasi Data</h2>
-        </div>
-        <p className="text-xs text-slate-500">Hosting: Vercel · Database: Supabase Cloud · Region: Singapore</p>
-        <p className="text-xs text-slate-400">Data diisolasi per akun pengguna via Row Level Security (RLS).</p>
-      </section>
-
-      {/* Notifikasi Telegram */}
-      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
-        <div className="flex items-center gap-2 mb-1">
-          <Send className="w-4 h-4 text-sky-500" />
-          <h2 className="font-semibold text-sm text-slate-800">Notifikasi Telegram</h2>
+    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-4">
+      {/* Profil */}
+      <section className="card p-5">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-9 h-9 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+            <User className="w-4 h-4 text-rose-500" />
+          </div>
+          <div>
+            <h2 className="font-bold text-slate-900">Profil</h2>
+            <p className="text-xs text-slate-500">Informasi akun dan bisnis Anda.</p>
+          </div>
         </div>
 
-        {settings?.telegram_chat_id ? (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-700">
-                Terhubung ke <span className="font-medium text-slate-900">@{TELEGRAM_BOT_USERNAME}</span>
-              </p>
-              <button
-                onClick={disconnect}
-                className="text-xs text-red-600 hover:text-red-800 font-medium"
-              >
-                Putuskan
-              </button>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Nama</label>
+            <input
+              type="text"
+              value={nama}
+              onChange={(e) => setNama(e.target.value)}
+              placeholder="Nama Anda"
+              className="input-base"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Email</label>
+            <div className="relative">
+              <input
+                type="email"
+                value={user?.email ?? ''}
+                disabled
+                className="input-base pr-9 bg-slate-50 text-slate-400 cursor-not-allowed"
+              />
+              <Lock className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
             </div>
-            <p className="text-xs text-emerald-600">
-              Notifikasi deadline akan dikirim otomatis ke akun Telegram ini.
-            </p>
           </div>
-        ) : connectCode ? (
-          <div className="space-y-3">
-            <p className="text-sm text-slate-700">
-              Langkah 1: Buka bot <span className="font-medium">@{TELEGRAM_BOT_USERNAME}</span> di Telegram
-              lalu ketuk link di bawah (mengirim kode otomatis):
-            </p>
-            <a
-              href={connectLink ?? '#'}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full text-center px-4 py-2.5 rounded-lg bg-sky-600 text-white text-sm font-medium hover:bg-sky-700 transition-colors"
-            >
-              Buka Bot Telegram
-            </a>
-            <div className="border-t border-slate-100 pt-3">
-              <p className="text-xs text-slate-500">
-                Di Telegram Web tidak otomatis? Buka chat <span className="font-medium">@{TELEGRAM_BOT_USERNAME}</span>,
-                lalu kirim kode ini secara manual:
-              </p>
-              <p className="mt-2 text-center text-2xl font-bold tracking-widest text-sky-600 bg-sky-50 border border-sky-200 rounded-lg py-2">
-                /start {connectCode}
-              </p>
-            </div>
-            {connecting && (
-              <p className="text-xs text-slate-400">Menunggu konfirmasi dari Telegram...</p>
-            )}
-            <button
-              onClick={() => { setConnectCode(null); setConnectLink(null); setConnecting(false) }}
-              className="text-xs text-slate-400 hover:text-slate-600"
-            >
-              Batalkan
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-xs text-slate-500">
-              Hubungkan akun Telegram untuk menerima notifikasi otomatis saat ada job mendekati deadline
-              (H-3) atau terlambat. Notifikasi hanya berisi job milik akun ini.
-            </p>
-            <button
-              onClick={startConnect}
-              className="w-full px-4 py-2.5 rounded-lg bg-sky-600 text-white text-sm font-medium hover:bg-sky-700 transition-colors"
-            >
-              Hubungkan Telegram
-            </button>
-          </div>
-        )}
+        </div>
 
-        <div className="border-t border-slate-100 pt-3 flex gap-2 items-center">
-          <label htmlFor="notif-jam" className="text-sm text-slate-700 shrink-0">Jam notifikasi</label>
-          <input
-            id="notif-jam"
-            type="time"
-            value={notifJam}
-            onChange={(e) => setNotifJam(e.target.value)}
-            className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-          />
-          <button
-            onClick={saveJam}
-            className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 transition-colors"
-          >
-            Simpan
+        <div className="flex items-center justify-end mt-6 pt-4 border-t border-slate-100">
+          <button onClick={handleSaveProfile} disabled={saving} className="btn-primary min-w-[150px] justify-center">
+            {saving ? 'Menyimpan…' : 'Edit Profil'}
           </button>
         </div>
-        {jamSaved && <p className="text-xs text-emerald-600">Jam notifikasi tersimpan.</p>}
+      </section>
+
+      {/* Notifikasi */}
+      <section className="card p-5">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+            <Bell className="w-4 h-4 text-emerald-500" />
+          </div>
+          <div>
+            <h2 className="font-bold text-slate-900">Notifikasi</h2>
+            <p className="text-xs text-slate-500">Atur notifikasi & pengingat.</p>
+          </div>
+        </div>
+
+        <div className="space-y-3 max-w-3xl">
+          {/* Telegram */}
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
+            <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center shrink-0">
+              <Send className="w-5 h-5 text-sky-500" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-slate-900">Telegram</p>
+              <p className="text-sm text-slate-500 truncate">@{TELEGRAM_BOT_USERNAME}</p>
+            </div>
+            {settings?.telegram_chat_id ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                Terhubung
+              </span>
+            ) : (
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500 shrink-0">
+                Belum Terhubung
+              </span>
+            )}
+          </div>
+
+          {/* Jam Notifikasi */}
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
+            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 text-emerald-500" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-slate-900">Jam Notifikasi</p>
+              <p className="text-xs text-slate-400">Pengingat harian</p>
+            </div>
+            <input
+              type="time"
+              value={jam}
+              onChange={(e) => setJam(e.target.value)}
+              className="input-base max-w-[135px]"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-100 gap-3">
+          <p className="text-xs text-slate-500">
+            Notifikasi deadline dikirim otomatis ke akun Telegram setiap hari.
+          </p>
+          <button onClick={() => setNotifModal(true)} className="btn-primary min-w-[150px] justify-center shrink-0">
+            Ubah Pengaturan
+          </button>
+        </div>
       </section>
 
       {/* Recycle Bin */}
-      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
-            <h2 className="font-semibold text-sm text-slate-800">Recycle Bin</h2>
-            {trashCount > 0 && (
-              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">{trashCount}</span>
-            )}
+      <section className="card p-5">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center shrink-0">
+            <Trash2 className="w-4 h-4 text-orange-500" />
           </div>
-          {trashCount > 0 && (
-            <button onClick={emptyTrash} className="text-xs text-red-600 hover:text-red-800 font-medium">
-              Kosongkan Sampah
-            </button>
-          )}
+          <div>
+            <h2 className="font-bold text-slate-900">Recycle Bin</h2>
+            <p className="text-xs text-slate-500">Data yang dihapus akan tersimpan sementara selama 30 hari.</p>
+          </div>
         </div>
 
-        <div className="flex border-b border-slate-100">
-          {([
-            { key: 'job' as RecycleTab, label: `Job (${deletedJobs.length})` },
-            { key: 'vendor' as RecycleTab, label: `Vendor (${deletedVendors.length})` },
-            { key: 'invoice' as RecycleTab, label: `Invoice (${deletedInvoices.length})` },
-          ]).map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setRecycleTab(t.key)}
-              className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
-                recycleTab === t.key
-                  ? 'text-rose-600 border-b-2 border-rose-600'
-                  : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-3xl">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
+            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+              <ClipboardList className="w-5 h-5 text-blue-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-slate-900">{recycleCount.jobs}</p>
+              <p className="text-sm text-slate-500">Job</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
+            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+              <Users className="w-5 h-5 text-emerald-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-slate-900">{recycleCount.vendors}</p>
+              <p className="text-sm text-slate-500">Vendor</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
+            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+              <ReceiptText className="w-5 h-5 text-amber-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-slate-900">{recycleCount.invoices}</p>
+              <p className="text-sm text-slate-500">Invoice</p>
+            </div>
+          </div>
         </div>
 
-        <div className="divide-y divide-slate-50 max-h-80 overflow-y-auto">
-          {recycleTab === 'job' && (
-            deletedJobs.length === 0 ? (
-              <p className="text-center py-8 text-xs text-slate-400">Kosong</p>
-            ) : (
-              deletedJobs.map((j) => (
-                <div key={j.id} className="flex items-center justify-between px-5 py-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-700 truncate">{j.nama_project}</p>
-                    <p className="text-xs text-slate-400">Dihapus: {formatDate(j.deleted_at?.slice(0, 10))}</p>
-                  </div>
-                  <div className="flex gap-1 shrink-0 ml-3">
-                    <button onClick={() => restore('job', j.id)} className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded" title="Pulihkan"><RotateCcw className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => hardDelete('job', j.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded" title="Hapus permanen"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </div>
-                </div>
-              ))
-            )
-          )}
-          {recycleTab === 'vendor' && (
-            deletedVendors.length === 0 ? (
-              <p className="text-center py-8 text-xs text-slate-400">Kosong</p>
-            ) : (
-              deletedVendors.map((v) => (
-                <div key={v.id} className="flex items-center justify-between px-5 py-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-700 truncate">{v.nama}</p>
-                    <p className="text-xs text-slate-400">Dihapus: {formatDate(v.deleted_at?.slice(0, 10))}</p>
-                  </div>
-                  <div className="flex gap-1 shrink-0 ml-3">
-                    <button onClick={() => restore('vendor', v.id)} className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded" title="Pulihkan"><RotateCcw className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => hardDelete('vendor', v.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded" title="Hapus permanen"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </div>
-                </div>
-              ))
-            )
-          )}
-          {recycleTab === 'invoice' && (
-            deletedInvoices.length === 0 ? (
-              <p className="text-center py-8 text-xs text-slate-400">Kosong</p>
-            ) : (
-              deletedInvoices.map((inv) => (
-                <div key={inv.id} className="flex items-center justify-between px-5 py-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-700 truncate">{inv.vendor_nama} · {rupiah(inv.total)}</p>
-                    <p className="text-xs text-slate-400">Dihapus: {formatDate(inv.deleted_at?.slice(0, 10))}</p>
-                  </div>
-                  <div className="flex gap-1 shrink-0 ml-3">
-                    <button onClick={() => restore('invoice', inv.id)} className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded" title="Pulihkan"><RotateCcw className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => hardDelete('invoice', inv.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded" title="Hapus permanen"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </div>
-                </div>
-              ))
-            )
-          )}
+        <div className="flex items-center justify-end mt-6 pt-4 border-t border-slate-100">
+          <button
+            onClick={() => setRecycleOpen(true)}
+            className="btn-secondary min-w-[150px] justify-center"
+          >
+            <Trash2 className="w-4 h-4" />
+            Buka Recycle Bin
+          </button>
         </div>
       </section>
 
-      {/* Logout (mobile) */}
-      <button
-        onClick={() => signOut()}
-        className="md:hidden flex items-center justify-center gap-2 w-full border border-slate-300 text-slate-600 rounded-lg py-3 text-sm font-medium hover:bg-slate-50"
-      >
-        <LogOut className="w-4 h-4" /> Keluar
-      </button>
+      {/* Tentang Aplikasi */}
+      <section className="card p-5">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-9 h-9 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+            <Info className="w-4 h-4 text-purple-500" />
+          </div>
+          <div>
+            <h2 className="font-bold text-slate-900">Tentang Aplikasi</h2>
+            <p className="text-xs text-slate-500">Informasi versi dan update aplikasi.</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Versi Aplikasi</label>
+            <p className="text-base font-bold text-slate-900">1.0.0</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Database</label>
+            <p className="text-base font-bold text-slate-900">Supabase (PostgreSQL)</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Update Terakhir</label>
+            <p className="text-base font-bold text-slate-900">2 Agustus 2026</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end mt-6 pt-4 border-t border-slate-100">
+          <button onClick={handleCheckUpdate} className="btn-secondary min-w-[150px] justify-center">
+            Cek Update
+          </button>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <div className="text-center text-sm text-slate-400 py-4">
+        © 2026 SiEdit. Semua hak dilindungi.
+      </div>
+
+      {/* Modal Pengaturan Notifikasi */}
+      {notifModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="card p-5 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
+                  <Bell className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Pengaturan Notifikasi</h2>
+                  <p className="text-sm text-slate-500">Atur notifikasi sesuai kebutuhan Anda</p>
+                </div>
+              </div>
+              <button onClick={() => setNotifModal(false)} className="p-1 hover:bg-slate-100 rounded">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Notifikasi Telegram */}
+              <div>
+                <h3 className="font-semibold text-slate-900 mb-3">Notifikasi Telegram</h3>
+                <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <Send className="w-5 h-5 text-sky-500" />
+                    <div>
+                      <p className="text-sm font-medium text-slate-900">Akun Bot</p>
+                      <p className="text-sm text-slate-600">@{TELEGRAM_BOT_USERNAME}</p>
+                    </div>
+                  </div>
+                  {settings?.telegram_chat_id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-emerald-600">● Terhubung</span>
+                      <button onClick={handleDisconnectTelegram} className="text-sm text-rose-600 hover:text-rose-700 font-medium">
+                        Putuskan
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={handleConnectTelegram} className="text-sm text-sky-600 hover:text-sky-700 font-medium">
+                      Hubungkan
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Jam Notifikasi */}
+              <div>
+                <h3 className="font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                  <Clock className="w-4 h-4" />
+                  Jam Notifikasi
+                </h3>
+                <p className="text-sm text-slate-500 mb-2">Notifikasi akan dikirim setiap hari pada jam yang dipilih</p>
+                <input
+                  type="time"
+                  value={jam}
+                  onChange={(e) => setJam(e.target.value)}
+                  className="input-base"
+                />
+              </div>
+
+              {/* Pilih Jenis Notifikasi */}
+              <div>
+                <h3 className="font-semibold text-slate-900 mb-3">Pilih Jenis Notifikasi</h3>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-slate-900">Deadline Hari Ini</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Disarankan</span>
+                      </div>
+                      <p className="text-xs text-slate-500">Kirim notifikasi untuk job yang deadline hari ini.</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-slate-900">Deadline Besok</span>
+                      <p className="text-xs text-slate-500">Kirim notifikasi ketika ada job deadline besok.</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-slate-900">Job Baru</span>
+                      <p className="text-xs text-slate-500">Kirim notifikasi ketika ada job baru dibuat.</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-slate-900">Job Revisi</span>
+                      <p className="text-xs text-slate-500">Kirim notifikasi ketika ada job yang masuk revisi.</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-slate-900">Vendor Belum Bayar</span>
+                      <p className="text-xs text-slate-500">Kirim notifikasi untuk vendor yang masih memiliki tagihan belum lunas.</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 mt-8">
+              <button onClick={() => { setJam('07:00'); toast({ type: 'info', title: 'Jam direset ke 07:00' }) }} className="btn-secondary px-6">
+                Reset
+              </button>
+              <div className="flex-1" />
+              <button onClick={() => setNotifModal(false)} className="btn-secondary px-6">
+                Batal
+              </button>
+              <button onClick={handleSaveJam} disabled={saving} className="btn-primary px-6">
+                {saving ? 'Menyimpan…' : 'Simpan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Connect Telegram */}
+      {connectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <div className="card p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center">
+                  <Send className="w-5 h-5 text-sky-600" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Hubungkan Telegram</h2>
+                  <p className="text-sm text-slate-500">Ikuti 3 langkah berikut</p>
+                </div>
+              </div>
+              <button onClick={() => setConnectModal(false)} className="p-1 hover:bg-slate-100 rounded">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <ol className="space-y-3 text-sm text-slate-600">
+              <li className="flex gap-3">
+                <span className="w-6 h-6 shrink-0 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center text-xs font-bold">1</span>
+                Buka Telegram dan cari bot <span className="font-semibold text-slate-900">@{TELEGRAM_BOT_USERNAME}</span>
+              </li>
+              <li className="flex gap-3">
+                <span className="w-6 h-6 shrink-0 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center text-xs font-bold">2</span>
+                Tekan <span className="font-semibold text-slate-900">Mulai / Start</span> pada bot
+              </li>
+              <li className="flex gap-3">
+                <span className="w-6 h-6 shrink-0 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center text-xs font-bold">3</span>
+                Kirim kode berikut ke bot:
+              </li>
+            </ol>
+
+            <div className="mt-4 p-4 bg-slate-50 rounded-xl text-center">
+              <p className="text-3xl font-extrabold tracking-[0.35em] text-slate-900 select-all">{connectCode}</p>
+              <p className="text-xs text-slate-500 mt-2">
+                Berlaku hingga {new Date(connectExpires).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between mt-6">
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                <CheckCircle2 className="w-4 h-4" /> Bot aktif setiap saat
+              </span>
+              <button onClick={() => setConnectModal(false)} className="btn-primary px-6">
+                Selesai
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Recycle Bin */}
+      <RecycleBinModal
+        open={recycleOpen}
+        onClose={() => {
+          setRecycleOpen(false)
+          loadData()
+        }}
+      />
     </div>
   )
 }

@@ -1,6 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { BarChart3, TrendingUp, Award, Briefcase, Calendar, Download } from 'lucide-react'
-import ExcelJS from 'exceljs'
+import { Download, Briefcase, TrendingUp, Calendar, CheckCircle2, AlertTriangle, Wallet, TrendingDown, Users, Scissors, RotateCcw } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { rupiah } from '../lib/utils'
 
@@ -11,6 +10,7 @@ interface RawJob {
   harga: number
   tanggal_lunas: string | null
   deadline: string | null
+  created_at: string
   jenis_edit: string
   status_edit: string
   status_bayar: string
@@ -19,17 +19,315 @@ interface RawJob {
   vendor: { nama: string } | null
 }
 
+interface VendorRow {
+  id: string
+  nama: string
+}
+
+const TAB = [
+  { id: 'ringkasan', label: 'Ringkasan', icon: TrendingUp },
+  { id: 'job', label: 'Job', icon: Briefcase },
+  { id: 'keuangan', label: 'Keuangan', icon: Wallet },
+  { id: 'vendor', label: 'Vendor', icon: Users },
+  { id: 'jenis', label: 'Jenis Edit', icon: Scissors },
+  { id: 'revisi', label: 'Revisi', icon: RotateCcw },
+] as const
+type TabId = (typeof TAB)[number]['id']
+
+const DONUT_PALETTE = ['#f43f5e', '#f97316', '#8b5cf6', '#0ea5e9', '#10b981', '#eab308', '#6366f1', '#64748b']
+const STATUS_COLORS: Record<string, string> = {
+  Masuk: '#0ea5e9',
+  'Sedang Edit': '#f97316',
+  Revisi: '#eab308',
+  Selesai: '#10b981',
+}
+
+/* ─── Chart primitives ───────────────────────────────────────── */
+
+function Donut({ data, centerLabel, centerValue }: { data: { label: string; value: number; color: string }[]; centerLabel: string; centerValue: string }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1
+  const R = 40
+  const C = 2 * Math.PI * R
+  let acc = 0
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="relative w-40 h-40">
+        <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+          {data.map((d) => {
+            const frac = d.value / total
+            const dash = frac * C
+            const offset = -acc * C
+            acc += frac
+            return (
+              <circle
+                key={d.label}
+                cx="50" cy="50" r={R} fill="none"
+                stroke={d.color} strokeWidth="14"
+                strokeDasharray={`${dash} ${C - dash}`}
+                strokeDashoffset={offset}
+                strokeLinecap="butt"
+                className="transition-all duration-700"
+              />
+            )
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-2xl font-extrabold text-slate-900">{centerValue}</span>
+          <span className="text-[11px] text-slate-500">{centerLabel}</span>
+        </div>
+      </div>
+      <div className="w-full space-y-1.5">
+        {data.map((d) => (
+          <div key={d.label} className="flex items-center gap-2 text-sm">
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: d.color }} />
+            <span className="text-slate-600 flex-1 truncate">{d.label}</span>
+            <span className="font-semibold text-slate-900">{d.value}</span>
+            <span className="text-xs text-slate-400 w-10 text-right">{((d.value / total) * 100).toFixed(0)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function VBar({ data, colors, labels }: { data: (number | [number, number])[]; colors: string[]; labels: string[] }) {
+  const grouped = Array.isArray(data[0])
+  const seriesCount = grouped ? (data[0] as number[]).length : 1
+  const W = 560
+  const H = 200
+  const PAD = 30
+  const bottom = 20
+  const top = 14
+  const max = Math.max(...data.flatMap((d) => Array.isArray(d) ? d : [d]), 1)
+  const innerW = W - PAD * 2
+  const slot = innerW / labels.length
+  const barW = grouped ? Math.min(slot * 0.28, 18) : Math.min(slot * 0.5, 26)
+  const innerH = H - PAD - bottom - top
+
+  const yGrid = [0, 0.25, 0.5, 0.75, 1]
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        {yGrid.map((g) => {
+          const y = PAD + innerH - g * innerH
+          const v = max * g
+          return (
+            <g key={g}>
+              <line x1={PAD} x2={W - PAD} y1={y} y2={y} stroke="#e2e8f0" strokeDasharray="3 3" />
+              <text x={PAD - 5} y={y + 3} textAnchor="end" fontSize="8" fill="#94a3b8">
+                {v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}jt` : v >= 1000 ? `${Math.round(v / 1000)}rb` : Math.round(v)}
+              </text>
+            </g>
+          )
+        })}
+        {data.map((d, i) => {
+          const cx = PAD + slot * i + slot / 2
+          const vals = Array.isArray(d) ? d : [d]
+          const offset = grouped ? (barW * seriesCount + 3) / 2 : 0
+          return (
+            <g key={i}>
+              {vals.map((v, s) => {
+                const h = (v / max) * innerH
+                const x = cx - offset + (grouped ? s * (barW + 3) : 0)
+                const y = PAD + innerH - h
+                return (
+                  <rect
+                    key={s}
+                    x={x} y={y} width={barW} height={Math.max(h, v > 0 ? 2 : 0)}
+                    rx="3" fill={colors[s % colors.length]}
+                    className="animate-growBar origin-bottom"
+                    style={{ animation: 'growBar 0.6s ease-out' }}
+                  >
+                    <title>{`${labels[i]}: ${rupiah(v)}`}</title>
+                  </rect>
+                )
+              })}
+            </g>
+          )
+        })}
+      </svg>
+      <div className="flex px-6 mt-1 text-[11px] text-slate-500">
+        {labels.map((l) => (
+          <span key={l} className="flex-1 text-center truncate">{l}</span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function HBar({ data, color = '#f43f5e' }: { data: { label: string; value: number }[]; color?: string }) {
+  const max = Math.max(...data.map((d) => d.value), 1)
+  return (
+    <div className="space-y-3">
+      {data.map((d) => (
+        <div key={d.label}>
+          <div className="flex items-center justify-between text-sm mb-1">
+            <span className="text-slate-600 truncate">{d.label}</span>
+            <span className="font-semibold text-slate-900 shrink-0 ml-2">{rupiah(d.value)}</span>
+          </div>
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-700"
+              style={{ width: `${Math.max((d.value / max) * 100, d.value > 0 ? 2 : 0)}%`, background: color }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function Spline({ series, labels, hidden }: { series: { label: string; color: string; data: number[] }[]; labels: string[]; hidden: Set<string> }) {
+  const W = 560
+  const H = 200
+  const PAD = 30
+  const bottom = 20
+  const top = 14
+  const innerW = W - PAD * 2
+  const innerH = H - PAD - bottom - top
+  const max = Math.max(...series.flatMap((s) => hidden.has(s.label) ? [] : s.data), 1)
+
+  const x = (i: number) => PAD + (i * innerW) / Math.max(labels.length - 1, 1)
+  const y = (v: number) => PAD + innerH - (v / max) * innerH
+
+  const smoothPath = (pts: { x: number; y: number }[]) => {
+    if (pts.length === 0) return ''
+    if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`
+    let d = `M ${pts[0].x} ${pts[0].y}`
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[Math.max(0, i - 1)]
+      const p1 = pts[i]
+      const p2 = pts[i + 1]
+      const p3 = pts[Math.min(pts.length - 1, i + 2)]
+      const c1x = p1.x + (p2.x - p0.x) / 6
+      const c1y = p1.y + (p2.y - p0.y) / 6
+      const c2x = p2.x - (p3.x - p1.x) / 6
+      const c2y = p2.y - (p3.y - p1.y) / 6
+      d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`
+    }
+    return d
+  }
+
+  const yGrid = [0, 0.25, 0.5, 0.75, 1]
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        {yGrid.map((g) => {
+          const yy = PAD + innerH - g * innerH
+          return <line key={g} x1={PAD} x2={W - PAD} y1={yy} y2={yy} stroke="#e2e8f0" strokeDasharray="3 3" />
+        })}
+        {series.map((s) => {
+          if (hidden.has(s.label)) return null
+          const pts = s.data.map((v, i) => ({ x: x(i), y: y(v) }))
+          const d = smoothPath(pts)
+          const area = `${d} L ${x(s.data.length - 1)} ${PAD + innerH} L ${x(0)} ${PAD + innerH} Z`
+          return (
+            <g key={s.label}>
+              <path d={area} fill={s.color} opacity="0.08" />
+              <path d={d} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+              {pts.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r="3" fill="#fff" stroke={s.color} strokeWidth="2">
+                  <title>{`${s.label} ${labels[i]}: ${s.data[i]}`}</title>
+                </circle>
+              ))}
+            </g>
+          )
+        })}
+      </svg>
+      <div className="flex px-6 mt-1 text-[11px] text-slate-500">
+        {labels.map((l) => (
+          <span key={l} className="flex-1 text-center truncate">{l}</span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AreaChart({ data, labels, color = '#f472b6' }: { data: number[]; labels: string[]; color?: string }) {
+  const W = 560
+  const H = 180
+  const PAD = 28
+  const bottom = 18
+  const innerW = W - PAD * 2
+  const innerH = H - PAD - bottom
+  const max = Math.max(...data, 1)
+  const x = (i: number) => PAD + (i * innerW) / Math.max(labels.length - 1, 1)
+  const y = (v: number) => PAD + innerH - (v / max) * innerH
+  const pts = data.map((v, i) => ({ x: x(i), y: y(v) }))
+  const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+  const area = `${line} L ${x(data.length - 1)} ${PAD + innerH} L ${x(0)} ${PAD + innerH} Z`
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        <defs>
+          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0.25, 0.5, 0.75, 1].map((g) => (
+          <line key={g} x1={PAD} x2={W - PAD} y1={y(max * g)} y2={y(max * g)} stroke="#e2e8f0" strokeDasharray="3 3" />
+        ))}
+        <path d={area} fill="url(#areaGrad)" />
+        <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        {pts.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="3" fill="#fff" stroke={color} strokeWidth="2">
+            <title>{`${labels[i]}: ${data[i]}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="flex px-6 mt-1 text-[11px] text-slate-500">
+        {labels.map((l) => (
+          <span key={l} className="flex-1 text-center truncate">{l}</span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function Heatmap({ dayCounts }: { dayCounts: number[] }) {
+  const max = Math.max(...dayCounts, 1)
+  const cellColor = (v: number) => {
+    const t = v / max
+    if (v === 0) return '#f1f5f9'
+    return `rgb(${Math.round(241 - t * 150)}, ${Math.round(245 - t * 140)}, ${Math.round(249 - t * 190)})`
+  }
+  return (
+    <div className="grid grid-cols-10 md:grid-cols-[repeat(16,minmax(0,1fr))] gap-1.5">
+      {dayCounts.map((v, i) => {
+        const day = i + 1
+        return (
+          <div
+            key={day}
+            title={`Tanggal ${day}: ${v} job`}
+            className="aspect-square rounded-md flex items-center justify-center text-[10px] font-semibold"
+            style={{ background: cellColor(v), color: v > max * 0.5 ? '#fff' : '#334155' }}
+          >
+            {day}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ─── Main ───────────────────────────────────────────────────── */
+
 export default function Reports() {
   const now = new Date()
   const curMonth = now.getMonth()
   const curYear = now.getFullYear()
 
-  const [fromMonth, setFromMonth] = useState(curMonth)
-  const [fromYear, setFromYear] = useState(curYear - 1)
+  const [tab, setTab] = useState<TabId>('ringkasan')
+  const [fromMonth, setFromMonth] = useState(curMonth - 5 >= 0 ? curMonth - 5 : 0)
+  const [fromYear, setFromYear] = useState(curMonth - 5 >= 0 ? curYear : curYear - 1)
   const [toMonth, setToMonth] = useState(curMonth)
   const [toYear, setToYear] = useState(curYear)
-  const [raw, setRaw] = useState<RawJob[]>([])
-  const [prevTotal, setPrevTotal] = useState(0)
+  const [jobs, setJobs] = useState<RawJob[]>([])
+  const [vendors, setVendors] = useState<VendorRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -56,177 +354,149 @@ export default function Reports() {
   }
 
   const monthList = useMemo(() => allMonths(), [fromYear, fromMonth, toYear, toMonth])
-  const monthCount = monthList.length
 
   useEffect(() => { loadData() }, [fromYear, fromMonth, toYear, toMonth])
 
   async function loadData() {
     setLoading(true)
     setError('')
-
     const from = dateStr(fromYear, fromMonth) + '-01'
     const to = monthEnd(toYear, toMonth)
-
-    const prevEnd = { year: fromYear, month: fromMonth - 1 }
-    if (prevEnd.month < 0) { prevEnd.month = 11; prevEnd.year-- }
-    const prevStart = { year: prevEnd.year, month: prevEnd.month - (monthCount - 1) }
-    if (prevStart.month < 0) { prevStart.month += 12; prevStart.year-- }
-
-    const [mainRes, prevRes] = await Promise.all([
+    const [jobRes, vendorRes] = await Promise.all([
       supabase
         .from('job')
-        .select('nama_project, harga, tanggal_lunas, deadline, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
+        .select('nama_project, harga, tanggal_lunas, deadline, created_at, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
         .is('deleted_at', null)
-        .eq('status_bayar', 'Lunas')
-        .gte('tanggal_lunas', from)
-        .lte('tanggal_lunas', to)
-        .order('tanggal_lunas'),
-      supabase
-        .from('job')
-        .select('harga')
-        .is('deleted_at', null)
-        .eq('status_bayar', 'Lunas')
-        .gte('tanggal_lunas', dateStr(prevStart.year, prevStart.month) + '-01')
-        .lte('tanggal_lunas', monthEnd(prevEnd.year, prevEnd.month)),
+        .gte('created_at', from)
+        .lte('created_at', to + 'T23:59:59')
+        .order('created_at', { ascending: false }),
+      supabase.from('vendor').select('id, nama').is('deleted_at', null),
     ])
-
-    if (mainRes.error) {
-      setError(mainRes.error.message)
+    if (jobRes.error) {
+      setError(jobRes.error.message)
       setLoading(false)
       return
     }
-
-    setRaw((mainRes.data ?? []) as unknown as RawJob[])
-    setPrevTotal(
-      (prevRes.data ?? []).reduce((s: number, j: { harga: number }) => s + j.harga, 0)
-    )
+    setJobs((jobRes.data ?? []) as unknown as RawJob[])
+    setVendors((vendorRes.data ?? []) as VendorRow[])
     setLoading(false)
   }
 
-  // ─── Computed ──────────────────────────────────────
+  /* ─── Computed ───────────────────────────────────── */
 
-  const monthly = useMemo(() => {
-    const map = new Map<string, { count: number; total: number }>()
-    for (const j of raw) {
-      const key = j.tanggal_lunas?.slice(0, 7)
-      if (!key) continue
-      const prev = map.get(key) ?? { count: 0, total: 0 }
-      map.set(key, { count: prev.count + 1, total: prev.total + j.harga })
-    }
+  const totalJobs = jobs.length
+  const totalPendapatan = jobs.filter((j) => j.status_bayar === 'Lunas').reduce((s, j) => s + j.harga, 0)
+  const totalOutstanding = jobs.filter((j) => j.status_bayar !== 'Lunas').reduce((s, j) => s + j.harga, 0)
+  const booking = jobs.filter((j) => j.status_edit === 'Masuk').length
+  const sedangEdit = jobs.filter((j) => j.status_edit === 'Sedang Edit').length
+  const revisiCount = jobs.filter((j) => j.status_edit === 'Revisi').length
+  const selesaiCount = jobs.filter((j) => j.status_edit === 'Selesai').length
+
+  const statusSeries = [
+    { label: 'Selesai', value: selesaiCount, color: STATUS_COLORS.Selesai },
+    { label: 'Sedang Edit', value: sedangEdit, color: STATUS_COLORS['Sedang Edit'] },
+    { label: 'Masuk', value: booking, color: STATUS_COLORS.Masuk },
+    { label: 'Revisi', value: revisiCount, color: STATUS_COLORS.Revisi },
+  ]
+
+  const monthlyRevenue = useMemo(() => {
     return monthList.map(({ year, month, label }) => {
       const key = `${year}-${String(month + 1).padStart(2, '0')}`
-      const m = map.get(key) ?? { count: 0, total: 0 }
-      return { year, month, label, count: m.count, total: m.total }
+      const total = jobs.filter((j) => (j.tanggal_lunas ?? '').startsWith(key) && j.status_bayar === 'Lunas').reduce((s, j) => s + j.harga, 0)
+      return { label, total }
     })
-  }, [raw, monthList])
+  }, [jobs, monthList])
 
-  const maxTotal = Math.max(...monthly.map((d) => d.total), 1)
-  const totalAll = monthly.reduce((s, d) => s + d.total, 0)
-  const activeMonths = monthly.filter((d) => d.count > 0).length
-  const avgMonthVal = activeMonths > 0 ? Math.round(totalAll / activeMonths) : 0
-  const best = monthly.reduce((a, b) => (a.total >= b.total ? a : b), monthly[0])
-  const totalJobs = monthly.reduce((s, d) => s + d.count, 0)
-
-  const pctChange = prevTotal > 0
-    ? ((totalAll - prevTotal) / prevTotal * 100).toFixed(1)
-    : null
-
-  // ─── Distribusi per jenis_edit ──────────────────────
-  const dist = useMemo(() => {
+  const jenisDist = useMemo(() => {
     const map = new Map<string, number>()
-    for (const j of raw) {
-      map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + j.harga)
-    }
-    const total = Array.from(map.values()).reduce((s, v) => s + v, 0) || 1
-    return Array.from(map.entries())
-      .map(([label, value]) => ({ label, value, pct: (value / total) * 100 }))
-      .sort((a, b) => b.value - a.value)
-  }, [raw])
+    for (const j of jobs) map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + 1)
+    return Array.from(map.entries()).map(([label, value], i) => ({ label, value, color: DONUT_PALETTE[i % DONUT_PALETTE.length] })).sort((a, b) => b.value - a.value)
+  }, [jobs])
 
-  const distColors: Record<string, string> = {
-    'Kolase Sudah Pilih': '#f59e0b',
-    'Kolase Belum Pilih': '#10b981',
-    'Edit Full': '#3b82f6',
-  }
-  const distBgColors: Record<string, string> = {
-    'Kolase Sudah Pilih': 'bg-amber-500',
-    'Kolase Belum Pilih': 'bg-emerald-500',
-    'Edit Full': 'bg-blue-500',
-  }
-
-  let cumulative = 0
-  const normalizedStops = dist.map((d) => {
-    const color = distColors[d.label] ?? '#94a3b8'
-    const start = cumulative
-    cumulative += d.pct
-    return `${color} ${start}% ${cumulative}%`
-  }).join(', ')
-
-  // ─── Top Vendors ────────────────────────────────────
-  const topVendors = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const j of raw) {
+  const vendorPerformance = useMemo(() => {
+    const map = new Map<string, { name: string; totalJob: number; pendapatan: number; outstanding: number; selesai: number }>()
+    for (const v of vendors) map.set(v.nama, { name: v.nama, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0 })
+    for (const j of jobs) {
       const name = j.vendor?.nama ?? 'Tanpa Vendor'
-      map.set(name, (map.get(name) ?? 0) + j.harga)
+      if (!map.has(name)) map.set(name, { name, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0 })
+      const s = map.get(name)!
+      s.totalJob++
+      if (j.status_bayar === 'Lunas') s.pendapatan += j.harga
+      else s.outstanding += j.harga
+      if (j.status_edit === 'Selesai') s.selesai++
     }
-    return Array.from(map.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 5)
-  }, [raw])
+    return Array.from(map.values()).sort((a, b) => b.pendapatan - a.pendapatan)
+  }, [jobs, vendors])
 
-  // ─── Export Excel ──────────────────────────────────
-  function fmtHarga(v: number) {
-    return 'Rp' + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+  const jenisRevenue = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const j of jobs) {
+      if (j.status_bayar === 'Lunas') map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + j.harga)
+    }
+    return Array.from(map.entries()).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
+  }, [jobs])
+
+  const revisionJobs = useMemo(() => {
+    return jobs.filter((j) => j.status_edit === 'Revisi' || (j.catatan?.toLowerCase().includes('revisi')))
+  }, [jobs])
+
+  const monthLabels = monthlyRevenue.map((m) => m.label.split(' ')[0])
+
+  const trendSeries = [
+    { label: 'Selesai', color: '#10b981', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.tanggal_lunas ?? '').startsWith(m.label.replace(' ', '-')) && j.status_edit === 'Selesai').length) },
+    { label: 'Sedang Edit', color: '#f97316', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Sedang Edit').length) },
+    { label: 'Batal', color: '#e11d48', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Batal').length) },
+  ]
+
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set())
+  function toggleSeries(label: string) {
+    setHiddenSeries((prev) => {
+      const next = new Set(prev)
+      if (next.has(label)) next.delete(label)
+      else next.add(label)
+      return next
+    })
   }
 
-  function fmtDate(v: string | null | undefined) {
-    if (!v) return '-'
-    const [y, m, d] = v.split('-')
-    if (!y || !m || !d) return v
-    return `${d}/${m}/${y}`
-  }
+  const dayCounts = useMemo(() => {
+    const arr = new Array(31).fill(0)
+    for (const j of jobs) {
+      const d = j.deadline ? Number(j.deadline.slice(8, 10)) : NaN
+      if (d >= 1 && d <= 31) arr[d - 1]++
+    }
+    return arr
+  }, [jobs])
 
-  const STATUS_STYLE: Record<string, { fill: string; font: string }> = {
-    'Selesai': { fill: 'FFDCFCE7', font: 'FF15803D' },
-    'Lunas': { fill: 'FFDCFCE7', font: 'FF15803D' },
-    'Sudah Cetak': { fill: 'FFDBEAFE', font: 'FF1D4ED8' },
-    'Sudah Dikirim': { fill: 'FFDBEAFE', font: 'FF1D4ED8' },
-    'Belum Bayar': { fill: 'FFFFE4E6', font: 'FFB91C1C' },
-    'Belum Cetak': { fill: 'FFFFF3C4', font: 'FFB45309' },
-    'Revisi': { fill: 'FFFFF3C4', font: 'FFB45309' },
-    'Masuk': { fill: 'FFF1F5F9', font: 'FF475569' },
-  }
-  const THIN_BORDER = {
-    top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-    left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-    bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-    right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-  } as const
+  const revisionDaily = useMemo(() => {
+    return monthList.map(({ year, month, label }) => {
+      const key = `${year}-${String(month + 1).padStart(2, '0')}`
+      const count = jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === key && (j.status_edit === 'Revisi' || (j.catatan ?? '').toLowerCase().includes('revisi'))).length
+      return { label: label.split(' ')[0], count }
+    })
+  }, [jobs, monthList])
+
+  /* ─── Export ───────────────────────────────────── */
 
   async function dataExportXLSX() {
+    const { default: ExcelJS } = await import('exceljs')
     const cols = ['PROYEK', 'VENDOR', 'JENIS EDIT', 'HARGA', 'DEADLINE', 'STATUS EDIT', 'STATUS BAYAR', 'STATUS CETAK', 'TANGGAL LUNAS', 'CATATAN']
-
-    const rows = raw.map((j) => [
-      j.nama_project,
-      j.vendor?.nama ?? '-',
-      j.jenis_edit,
-      fmtHarga(j.harga),
-      fmtDate(j.deadline),
-      j.status_edit,
-      j.status_bayar,
-      j.status_cetak,
-      fmtDate(j.tanggal_lunas),
-      j.catatan ? String(j.catatan) : '-',
+    const fmtHarga = (v: number) => 'Rp' + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+    const fmtDate = (v: string | null | undefined) => {
+      if (!v) return '-'
+      const [y, m, d] = v.split('-')
+      return y && m && d ? `${d}/${m}/${y}` : v
+    }
+    const rows = jobs.map((j) => [
+      j.nama_project, j.vendor?.nama ?? '-', j.jenis_edit, fmtHarga(j.harga), fmtDate(j.deadline),
+      j.status_edit, j.status_bayar, j.status_cetak, fmtDate(j.tanggal_lunas), j.catatan ? String(j.catatan) : '-',
     ])
-
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('Laporan SiEdit')
-
     const periode = `${monthList[0]?.label ?? ''} — ${monthList[monthList.length - 1]?.label ?? ''}`
-
-    sheet.addRow([`LAPORAN PENGHASILAN SIEDIT`])
+    sheet.addRow(['LAPORAN PENGHASILAN SIEDIT'])
     sheet.addRow([periode])
+    sheet.mergeCells(1, 1, 1, cols.length)
+    sheet.mergeCells(2, 1, 2, cols.length)
     const titleRow = sheet.getRow(1)
     titleRow.height = 24
     titleRow.font = { bold: true, size: 14, color: { argb: 'FF881337' } }
@@ -235,393 +505,540 @@ export default function Reports() {
     periodeRow.height = 16
     periodeRow.font = { size: 10, italic: true, color: { argb: 'FF64748B' } }
     periodeRow.alignment = { vertical: 'middle', horizontal: 'center' }
-    sheet.mergeCells(1, 1, 1, cols.length)
-    sheet.mergeCells(2, 1, 2, cols.length)
-
     sheet.addRow(cols)
     const headerRow = sheet.getRow(3)
     headerRow.height = 20
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE11D48' } }
-    headerRow.alignment = { vertical: 'middle', horizontal: 'center' }
-    headerRow.eachCell((cell) => {
-      cell.border = THIN_BORDER
-    })
-
     rows.forEach((r) => sheet.addRow(r))
-
-    const totalRow = sheet.addRow(['TOTAL', '', `${totalJobs} job`, fmtHarga(totalAll), '', '', '', '', '', ''])
+    const totalRow = sheet.addRow(['TOTAL', '', `${totalJobs} job`, fmtHarga(totalPendapatan), '', '', '', '', '', ''])
     totalRow.font = { bold: true }
     totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1F2' } }
-
-    const dataStartRow = 4
-    const dataEndRow = 3 + rows.length
-    sheet.eachRow((row, rowNum) => {
-      row.eachCell((cell, colNum) => {
-        if (rowNum >= 3) cell.border = THIN_BORDER
-        if (rowNum >= dataStartRow && rowNum <= dataEndRow) {
-          if ((rowNum - dataStartRow) % 2 === 1) {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
-          }
-          if (colNum === 4) cell.alignment = { vertical: 'middle', horizontal: 'right' }
-          if (colNum === 5 || colNum === 9) cell.alignment = { vertical: 'middle', horizontal: 'center' }
-          if (colNum === 10) cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true }
-          if (colNum === 6 || colNum === 7 || colNum === 8) {
-            const style = STATUS_STYLE[String(cell.value)]
-            if (style) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style.fill } }
-              cell.font = { bold: true, color: { argb: style.font } }
-            }
-            cell.alignment = { vertical: 'middle', horizontal: 'center' }
-          }
-        }
-      })
-    })
-
-    const allRows = [cols, ...rows, ['TOTAL', '', `${totalJobs} job`, fmtHarga(totalAll), '', '', '', '', '', '']]
+    const allRows = [cols, ...rows, ['TOTAL', '', `${totalJobs} job`, fmtHarga(totalPendapatan), '', '', '', '', '', '']]
     cols.forEach((_, ci) => {
       const maxLen = allRows.reduce((m, r) => Math.max(m, String(r[ci] ?? '').length), cols[ci].length)
       sheet.getColumn(ci + 1).width = ci === 9 ? Math.min(Math.max(maxLen + 2, 15), 60) : Math.min(Math.max(maxLen + 2, 10), 45)
     })
-
     sheet.views = [{ state: 'frozen', ySplit: 3 }]
-
     const buffer = await workbook.xlsx.writeBuffer()
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `data-lunas-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.xlsx`
+    a.download = `laporan-siedit-${dateStr(fromYear, fromMonth)}-${dateStr(toYear, toMonth)}.xlsx`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  // ─── MoM helper ─────────────────────────────────────
-  function momChange(i: number): { pct: string; up: boolean } | null {
-    if (i === 0) return null
-    const prev = monthly[i - 1].total
-    if (prev === 0) return monthly[i].total > 0 ? null : null
-    const diff = ((monthly[i].total - prev) / prev) * 100
-    return { pct: `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`, up: diff >= 0 }
+  /* ─── Render helpers ───────────────────────────── */
+
+  function Metric({ icon, label, value, sub, accent }: { icon: React.ReactNode; label: string; value: string; sub?: string; accent?: string }) {
+    return (
+      <div className="card p-4 relative overflow-hidden">
+        <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+          <span className={`w-8 h-8 rounded-full ${accent ?? 'bg-rose-500/10'} text-slate-600 flex items-center justify-center`}>{icon}</span>
+          <span className="font-medium">{label}</span>
+        </div>
+        <p className="text-lg font-bold text-slate-900">{value}</p>
+        {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+      </div>
+    )
   }
 
-  const hasData = totalAll > 0
+  function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+    return (
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold text-slate-900">{title}</h3>
+          {action}
+        </div>
+        {children}
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-4">
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-4 border-rose-500 border-t-transparent" />
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="p-4 md:p-8 max-w-3xl mx-auto space-y-5">
-      {/* ── Filter ─────────────────────────────── */}
-      <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={fromMonth} onChange={(e) => setFromMonth(Number(e.target.value))}
-            className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
-            {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
-          </select>
-          <select value={fromYear} onChange={(e) => setFromYear(Number(e.target.value))}
-            className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
-            {years.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-          <span className="text-slate-400 text-sm">—</span>
-          <select value={toMonth} onChange={(e) => setToMonth(Number(e.target.value))}
-            className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
-            {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
-          </select>
-          <select value={toYear} onChange={(e) => setToYear(Number(e.target.value))}
-            className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
-            {years.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-          <button onClick={dataExportXLSX} disabled={!hasData}
-            className="ml-auto flex items-center gap-1 text-xs text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-300 rounded-lg px-2.5 py-1.5 font-medium transition-colors disabled:opacity-40">
-            <Download className="w-3.5 h-3.5" /> Excel
+    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-4">
+      {/* ── Tab navigation ───────────────────────── */}
+      <div className="card p-1.5">
+        <div className="flex flex-wrap items-center gap-1">
+          {TAB.map((t) => {
+            const Icon = t.icon
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  tab === t.id ? 'bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-md shadow-rose-500/30' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Icon className="w-4 h-4" /> {t.label}
+              </button>
+            )
+          })}
+          <div className="flex-1" />
+          <button onClick={dataExportXLSX} className="btn-secondary !py-1.5">
+            <Download className="w-4 h-4" /> Excel
           </button>
         </div>
       </div>
 
-      {error && <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-3">{error}</div>}
-
-      {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-3 border-rose-500 border-t-transparent" />
+      {/* ── Period filter ───────────────────────── */}
+      <div className="card p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="micro-label mr-1">Periode</span>
+          <select value={fromMonth} onChange={(e) => setFromMonth(Number(e.target.value))} className="input-base !w-auto !py-1.5">
+            {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+          <select value={fromYear} onChange={(e) => setFromYear(Number(e.target.value))} className="input-base !w-auto !py-1.5">
+            {years.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <span className="text-slate-500 text-sm">—</span>
+          <select value={toMonth} onChange={(e) => setToMonth(Number(e.target.value))} className="input-base !w-auto !py-1.5">
+            {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+          <select value={toYear} onChange={(e) => setToYear(Number(e.target.value))} className="input-base !w-auto !py-1.5">
+            {years.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
         </div>
-      ) : !hasData ? (
-        <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-12 text-center">
-          <BarChart3 className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-          <p className="text-slate-500 text-sm">Belum ada penghasilan di periode ini.</p>
-        </div>
-      ) : (
-        <>
-          {/* ── Summary Box ──────────────────────── */}
-          <div className="border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden">
-            <div className="bg-rose-50 px-5 py-3 border-b border-slate-200">
-              <h2 className="font-bold text-slate-800 flex items-center gap-2">
-                📈 Laporan Penghasilan SiEdit
-              </h2>
-            </div>
-            <div className="px-5 py-4 space-y-2 text-sm">
-              <p className="flex items-center gap-2"><span className="w-5">💰</span> Penghasilan : <strong className="text-rose-600">{rupiah(totalAll)}</strong></p>
-              <p className="flex items-center gap-2"><span className="w-5">✅</span> Job Lunas   : <strong>{totalJobs}</strong></p>
-              <p className="flex items-center gap-2"><span className="w-5">📅</span> Periode     : {monthList[0]?.label} — {monthList[monthList.length - 1]?.label}</p>
-              {pctChange !== null && (
-                <p className="flex items-center gap-2 text-xs text-slate-400 ml-7">
-                  <span>{Number(pctChange) >= 0 ? '↑' : '↓'} {Math.abs(Number(pctChange))}% dari periode sebelumnya</span>
-                </p>
-              )}
-            </div>
+      </div>
+
+      {error && <div className="bg-red-500/10 border border-red-500/25 text-red-600 text-sm rounded-lg px-4 py-3">{error}</div>}
+
+      {/* ── RINGKASAN ────────────────────────────── */}
+      {tab === 'ringkasan' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <Metric icon={<Briefcase className="w-4 h-4" />} label="Total Job" value={String(totalJobs)} accent="bg-rose-500/10" />
+            <Metric icon={<Calendar className="w-4 h-4" />} label="Booking" value={String(booking)} accent="bg-sky-500/10" />
+            <Metric icon={<TrendingUp className="w-4 h-4" />} label="Sedang Edit" value={String(sedangEdit)} accent="bg-orange-500/10" />
+            <Metric icon={<AlertTriangle className="w-4 h-4" />} label="Revisi" value={String(revisiCount)} accent="bg-amber-500/10" />
+            <Metric icon={<Wallet className="w-4 h-4" />} label="Total Pendapatan" value={rupiah(totalPendapatan)} accent="bg-emerald-500/10" />
           </div>
 
-          {/* ── KPI Cards ───────────────────────── */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
-              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-emerald-50" />
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
-                <TrendingUp className="w-3.5 h-3.5 text-emerald-500" /> Rata-rata
-              </div>
-              <p className="text-lg font-bold text-slate-800">{rupiah(avgMonthVal)}</p>
-              <p className="text-xs text-slate-400">per bulan aktif</p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
-              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-amber-50" />
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
-                <Award className="w-3.5 h-3.5 text-amber-500" /> Tertinggi
-              </div>
-              <p className="text-lg font-bold text-slate-800 truncate">{best?.label ?? '-'}</p>
-              <p className="text-xs text-slate-400">{best?.total ? rupiah(best.total) : ''}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
-              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-blue-50" />
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
-                <Briefcase className="w-3.5 h-3.5 text-blue-500" /> Job Lunas
-              </div>
-              <p className="text-lg font-bold text-slate-800">{totalJobs}</p>
-              <p className="text-xs text-slate-400">{monthCount > 0 ? `${(totalJobs / monthCount).toFixed(1)}/bulan` : ''}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 relative overflow-hidden">
-              <div className="absolute -right-3 -top-3 w-16 h-16 rounded-full bg-rose-50" />
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
-                <Calendar className="w-3.5 h-3.5 text-rose-500" /> Bulan Aktif
-              </div>
-              <p className="text-lg font-bold text-slate-800">{activeMonths} / {monthCount}</p>
-              <p className="text-xs text-slate-400">{monthCount > 0 ? `${Math.round((activeMonths / monthCount) * 100)}%` : ''}</p>
-            </div>
+          <div className="grid lg:grid-cols-3 gap-4">
+            <Card title="Job per Status">
+              <Donut data={statusSeries} centerLabel="Total" centerValue={String(totalJobs)} />
+            </Card>
+            <Card title="Pendapatan (Per Bulan)">
+              <VBar data={monthlyRevenue.map((m) => m.total)} colors={['#f43f5e']} labels={monthLabels} />
+            </Card>
+            <Card title="Job per Jenis Edit">
+              <Donut data={jenisDist} centerLabel="Jenis" centerValue={String(jenisDist.reduce((s, d) => s + d.value, 0))} />
+            </Card>
           </div>
 
-          {/* ── Bar Chart ───────────────────────── */}
-          <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-4">📊 Grafik Pendapatan Bulanan</h3>
-            <div className="flex gap-2">
-              <div className="flex flex-col justify-between text-xs text-slate-400 pr-2 shrink-0" style={{ height: 200 }}>
-                {[0, 25, 50, 75, 100].reverse().map((pct) => {
-                  const v = Math.round((maxTotal * pct) / 100)
-                  return (
-                    <span key={pct} className="leading-none">
-                      {v >= 1_000_000 ? `Rp${(v / 1_000_000).toFixed(1)}jt` : v >= 1_000 ? `Rp${(v / 1_000).toFixed(0)}rb` : `Rp${v}`}
-                    </span>
-                  )
-                })}
-              </div>
-              <div className="flex-1 relative" style={{ height: 200 }}>
-                <div className="absolute inset-0 flex flex-col justify-between">
-                  {[0, 1, 2, 3, 4].map((i) => (
-                    <div key={i} className="border-t border-dashed border-slate-200" style={{ height: 0 }} />
-                  ))}
-                </div>
-                <div className="absolute inset-0 flex items-end gap-1">
-                  {monthly.map((d) => {
-                    const pct = maxTotal > 0 ? (d.total / maxTotal) * 100 : 0
-                    const isBest = d.total === best?.total && d.total > 0
-                    return (
-                      <div key={d.label} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] text-slate-500 font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-sm z-10">
-                          {rupiah(d.total)}
-                        </div>
-                        <div
-                          className={`w-full max-w-[36px] rounded-t transition-all duration-500 ease-out ${
-                            d.total === 0
-                              ? 'bg-slate-100'
-                              : isBest
-                                ? 'bg-gradient-to-t from-rose-600 via-rose-400 to-rose-300'
-                                : 'bg-gradient-to-t from-rose-400 to-rose-200'
-                          }`}
-                          style={{
-                            height: `${Math.max(pct, d.total === 0 ? 2 : 4)}%`,
-                            animation: 'growUp 0.6s ease-out',
-                          }}
-                        />
-                        {isBest && d.total > 0 && (
-                          <span className="text-[9px] text-rose-500 font-bold mt-0.5">★</span>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-            <div className="flex ml-8 mt-1.5">
-              {monthly.map((d) => (
-                <div key={d.label} className="flex-1 text-center text-[10px] text-slate-400 truncate">
-                  {d.label.split(' ')[0]}
-                </div>
-              ))}
-            </div>
-            <style>{`
-              @keyframes growUp {
-                from { transform: scaleY(0); }
-                to { transform: scaleY(1); }
-              }
-            `}</style>
-          </div>
-
-          {/* ── 2-Column: Donut + Top Vendors ──────── */}
-          <div className="grid md:grid-cols-2 gap-4">
-            {/* Donut */}
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
-              <h3 className="text-sm font-semibold text-slate-700 mb-3">📁 Distribusi per Jenis Edit</h3>
-              {dist.length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-6">Tidak ada data</p>
-              ) : (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="relative w-28 h-28">
-                    <div
-                      className="w-28 h-28 rounded-full"
-                      style={{ background: `conic-gradient(${normalizedStops})` }}
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center">
-                        <span className="text-lg font-bold text-slate-600">{totalJobs}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="w-full space-y-2">
-                    {dist.map((d) => (
-                      <div key={d.label}>
-                        <div className="flex items-center justify-between text-sm mb-0.5">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${distBgColors[d.label] ?? 'bg-slate-400'}`} />
-                            <span className="text-slate-600 truncate">{d.label}</span>
-                          </div>
-                          <span className="font-medium text-slate-800 shrink-0 ml-2">{d.pct.toFixed(0)}%</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${distBgColors[d.label] ?? 'bg-slate-400'}`}
-                            style={{ width: `${d.pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Top Vendors */}
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm p-5">
-              <h3 className="text-sm font-semibold text-slate-700 mb-3">🏆 Top Vendor</h3>
-              {topVendors.length === 0 ? (
-                <p className="text-sm text-slate-400">Tidak ada data</p>
-              ) : (
-                <div className="space-y-3">
-                  {topVendors.map((v, i) => {
-                    const pct = (v.value / totalAll) * 100
-                    return (
-                      <div key={v.name}>
-                        <div className="flex items-center justify-between text-sm mb-1">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 ${
-                              i === 0 ? 'bg-amber-400' : i === 1 ? 'bg-slate-400' : i === 2 ? 'bg-amber-700' : 'bg-slate-300'
-                            }`}>{i + 1}</span>
-                            <span className="text-slate-700 truncate font-medium">{v.name}</span>
-                          </div>
-                          <span className="text-slate-800 font-medium shrink-0 ml-2">{rupiah(v.value)}</span>
-                        </div>
-                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-rose-300 to-rose-500 transition-all duration-500"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    )
-                  })}
-                  <div className="text-[10px] text-slate-400 text-right pt-0.5">
-                    Dari {rupiah(totalAll)} total
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Monthly Table ────────────────────── */}
-          {monthly.length > 0 && (
-            <div className="border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-slate-200">
-                <h3 className="text-sm font-semibold text-slate-700">📋 Rincian Bulanan</h3>
-              </div>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Card
+              title="Top 5 Vendor (Berdasarkan Pendapatan)"
+              action={<button onClick={() => setTab('vendor')} className="text-xs text-rose-500 hover:text-rose-600 font-medium">Lihat Semua Vendor</button>}
+            >
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
-                      <th className="px-5 py-3 font-medium">Bulan</th>
-                      <th className="px-4 py-3 font-medium text-right">Job</th>
-                      <th className="px-4 py-3 font-medium text-right">Pendapatan</th>
-                      <th className="px-4 py-3 font-medium text-right">vs Sebelumnya</th>
-                      <th className="px-4 py-3 font-medium" style={{ width: '30%' }}>Indikator</th>
+                    <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                      <th className="py-2 pr-2 font-medium">Rank</th>
+                      <th className="py-2 pr-2 font-medium">Nama Vendor</th>
+                      <th className="py-2 pr-2 font-medium text-right">Total Job</th>
+                      <th className="py-2 pr-2 font-medium text-right">Piutang</th>
+                      <th className="py-2 font-medium text-right">Pendapatan</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {monthly.map((d, i) => {
-                      const mom = momChange(i)
-                      const pct = maxTotal > 0 ? (d.total / maxTotal) * 100 : 0
-                      return (
-                        <tr key={d.label} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-5 py-3 font-medium text-slate-700">{d.label}</td>
-                          <td className="px-4 py-3 text-right text-slate-600">{d.count}</td>
-                          <td className="px-4 py-3 text-right font-medium text-slate-800">
-                            {d.total > 0 ? rupiah(d.total) : <span className="text-slate-300">Rp 0</span>}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            {mom ? (
-                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                                mom.up ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                              }`}>
-                                {mom.pct}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-slate-300">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all duration-500 ${
-                                  d.total === 0
-                                    ? 'bg-slate-200'
-                                    : d.total === best?.total && d.total > 0
-                                      ? 'bg-gradient-to-r from-rose-500 to-rose-600'
-                                      : 'bg-gradient-to-r from-rose-300 to-rose-500'
-                                }`}
-                                style={{ width: `${Math.max(pct, d.total === 0 ? 2 : 4)}%` }}
-                              />
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
+                  <tbody className="divide-y divide-slate-100">
+                    {vendorPerformance.slice(0, 5).map((v, i) => (
+                      <tr key={v.name}>
+                        <td className="py-2.5 pr-2">
+                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${i === 0 ? 'bg-amber-400' : i === 1 ? 'bg-slate-500' : i === 2 ? 'bg-amber-700' : 'bg-slate-600'}`}>{i + 1}</span>
+                        </td>
+                        <td className="py-2.5 pr-2 font-medium text-slate-900">{v.name}</td>
+                        <td className="py-2.5 pr-2 text-right text-slate-600">{v.totalJob}</td>
+                        <td className="py-2.5 pr-2 text-right text-orange-600">{rupiah(v.outstanding)}</td>
+                        <td className="py-2.5 text-right font-semibold text-emerald-600">{rupiah(v.pendapatan)}</td>
+                      </tr>
+                    ))}
                   </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-50 border-t-2 border-slate-200">
-                      <td className="px-5 py-3 text-sm font-bold text-slate-800">TOTAL</td>
-                      <td className="px-4 py-3 text-right text-sm font-bold text-slate-800">{totalJobs}</td>
-                      <td className="px-4 py-3 text-right text-sm font-bold text-slate-800">{rupiah(totalAll)}</td>
-                      <td className="px-4 py-3" />
-                      <td className="px-4 py-3" />
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
-            </div>
-          )}
-        </>
+            </Card>
+
+            <Card title="Job Terbaru">
+              <div className="space-y-2.5">
+                {jobs.slice(0, 5).map((j) => (
+                  <div key={j.nama_project + j.deadline + j.harga} className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xs font-bold shrink-0">
+                      {(j.vendor?.nama ?? '?').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700 mb-0.5">{j.jenis_edit}</span>
+                      <p className="text-sm font-medium text-slate-900 truncate">{j.nama_project}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-semibold text-slate-900">{rupiah(j.harga)}</p>
+                      <p className="text-xs text-slate-400">{j.deadline ? j.deadline.slice(8, 10) + '/' + j.deadline.slice(5, 7) : '—'}</p>
+                    </div>
+                  </div>
+                ))}
+                {jobs.length === 0 && <p className="text-sm text-slate-400 text-center py-6">Belum ada job di periode ini.</p>}
+              </div>
+            </Card>
+          </div>
+        </div>
       )}
+
+      {/* ── JOB ─────────────────────────────────── */}
+      {tab === 'job' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Metric icon={<Briefcase className="w-4 h-4" />} label="Total" value={String(totalJobs)} accent="bg-slate-500/10" />
+            <Metric icon={<Calendar className="w-4 h-4" />} label="Pending (Masuk)" value={String(booking)} accent="bg-sky-500/10" />
+            <Metric icon={<TrendingUp className="w-4 h-4" />} label="Process" value={String(sedangEdit)} accent="bg-orange-500/10" />
+            <Metric icon={<CheckCircle2 className="w-4 h-4" />} label="Done" value={String(selesaiCount)} accent="bg-emerald-500/10" />
+            <Metric icon={<AlertTriangle className="w-4 h-4" />} label="Revision" value={String(revisiCount)} accent="bg-amber-500/10" />
+            <Metric icon={<TrendingDown className="w-4 h-4" />} label="Cancelled" value="0" accent="bg-rose-500/10" />
+          </div>
+
+          <Card
+            title="Trend Job"
+            action={
+              <div className="flex items-center gap-3">
+                {trendSeries.map((s) => (
+                  <button key={s.label} onClick={() => toggleSeries(s.label)} className="flex items-center gap-1.5 text-xs">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: hiddenSeries.has(s.label) ? '#cbd5e1' : s.color }} />
+                    <span className={hiddenSeries.has(s.label) ? 'text-slate-400 line-through' : 'text-slate-600'}>{s.label}</span>
+                  </button>
+                ))}
+              </div>
+            }
+          >
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-2">
+                <Spline series={trendSeries} labels={monthLabels} hidden={hiddenSeries} />
+              </div>
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Ringkasan Status</p>
+                {statusSeries.map((s) => {
+                  const pct = totalJobs > 0 ? (s.value / totalJobs) * 100 : 0
+                  return (
+                    <div key={s.label}>
+                      <div className="flex items-center justify-between text-sm mb-1">
+                        <span className="text-slate-600">{s.label}</span>
+                        <span className="font-semibold text-slate-900">{s.value} · {pct.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: s.color }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </Card>
+
+          <Card title="Job per Hari">
+            <Heatmap dayCounts={dayCounts} />
+          </Card>
+        </div>
+      )}
+
+      {/* ── KEUANGAN ────────────────────────────── */}
+      {tab === 'keuangan' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="card p-5 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-200">
+              <p className="text-sm text-slate-500 mb-1">Total Pendapatan</p>
+              <p className="text-2xl font-extrabold text-emerald-600">{rupiah(totalPendapatan)}</p>
+            </div>
+            <div className="card p-5 bg-gradient-to-br from-amber-500/10 to-amber-500/5 border-amber-200">
+              <p className="text-sm text-slate-500 mb-1">Belum Bayar</p>
+              <p className="text-2xl font-extrabold text-amber-600">{rupiah(totalOutstanding)}</p>
+            </div>
+            <div className="card p-5 bg-gradient-to-br from-slate-900 to-slate-800 text-white border-slate-800">
+              <p className="text-sm text-slate-400 mb-1">Total Nilai Pekerjaan</p>
+              <p className="text-2xl font-extrabold text-white">{rupiah(totalPendapatan + totalOutstanding)}</p>
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Card title="Pendapatan per Bulan">
+              <VBar
+                data={monthlyRevenue.map((m) => m.total)}
+                colors={['#10b981']}
+                labels={monthLabels}
+              />
+            </Card>
+
+            <Card title="Rincian Keuangan">
+              <div className="space-y-3">
+                {[
+                  { label: 'Sudah Dibayar', value: totalPendapatan, color: '#10b981' },
+                  { label: 'Belum Bayar', value: totalOutstanding, color: '#f59e0b' },
+                ].map((d) => {
+                  const base = Math.max(totalPendapatan + totalOutstanding, 1)
+                  const pct = (d.value / base) * 100
+                  return (
+                    <div key={d.label}>
+                      <div className="flex items-center justify-between text-sm mb-1">
+                        <span className="text-slate-600">{d.label}</span>
+                        <span className="font-semibold text-slate-900">{rupiah(d.value)} · {pct.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(pct, 100)}%`, background: d.color }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+          </div>
+
+          <Card title="Urutan Pendapatan Per Vendor">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                    <th className="py-2 pr-2 font-medium">Vendor</th>
+                    <th className="py-2 pr-2 font-medium text-right">Total Job</th>
+                    <th className="py-2 pr-2 font-medium text-right">Pendapatan</th>
+                    <th className="py-2 pr-2 font-medium text-right">Belum Bayar</th>
+                    <th className="py-2 font-medium text-right">Piutang</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {vendorPerformance.map((v) => (
+                    <tr key={v.name} className="hover:bg-slate-50/50">
+                      <td className="py-2.5 pr-2 font-medium text-slate-900">{v.name}</td>
+                      <td className="py-2.5 pr-2 text-right text-slate-600">{v.totalJob}</td>
+                      <td className="py-2.5 pr-2 text-right font-semibold text-emerald-600">{rupiah(v.pendapatan)}</td>
+                      <td className="py-2.5 pr-2 text-right text-amber-600">{rupiah(v.outstanding)}</td>
+                      <td className="py-2.5 text-right text-orange-600">{rupiah(v.outstanding)}</td>
+                    </tr>
+                  ))}
+                  {vendorPerformance.length === 0 && (
+                    <tr><td colSpan={5} className="py-6 text-center text-slate-400">Belum ada data.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── VENDOR ──────────────────────────────── */}
+      {tab === 'vendor' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Metric icon={<Users className="w-4 h-4" />} label="Total Vendor" value={String(vendors.length)} accent="bg-sky-500/10" />
+            <Metric icon={<Briefcase className="w-4 h-4" />} label="Total Job" value={String(totalJobs)} accent="bg-rose-500/10" />
+            <Metric icon={<Wallet className="w-4 h-4" />} label="Gross Earnings" value={rupiah(totalPendapatan)} accent="bg-emerald-500/10" />
+            <Metric icon={<TrendingDown className="w-4 h-4" />} label="Piutang" value={rupiah(totalOutstanding)} accent="bg-orange-500/10" />
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Card title="Distribusi Job per Vendor">
+              <Donut
+                data={vendorPerformance.map((v, i) => ({ label: v.name, value: v.totalJob, color: DONUT_PALETTE[i % DONUT_PALETTE.length] }))}
+                centerLabel="Job" centerValue={String(totalJobs)}
+              />
+            </Card>
+            <Card title="Pendapatan per Vendor">
+              <HBar data={vendorPerformance.map((v) => ({ label: v.name, value: v.pendapatan }))} color="#10b981" />
+            </Card>
+          </div>
+
+          <Card title="Performa Vendor">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                    <th className="py-2 pr-2 font-medium">#</th>
+                    <th className="py-2 pr-2 font-medium">Vendor</th>
+                    <th className="py-2 pr-2 font-medium text-right">Total Job</th>
+                    <th className="py-2 pr-2 font-medium text-right">Selesai</th>
+                    <th className="py-2 pr-2 font-medium text-right">% Selesai</th>
+                    <th className="py-2 pr-2 font-medium text-right">Pendapatan</th>
+                    <th className="py-2 font-medium text-right">Piutang</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {vendorPerformance.map((v, i) => {
+                    const pct = v.totalJob > 0 ? (v.selesai / v.totalJob) * 100 : 0
+                    return (
+                      <tr key={v.name} className="hover:bg-slate-50/50">
+                        <td className="py-2.5 pr-2 text-slate-500">{i + 1}</td>
+                        <td className="py-2.5 pr-2 font-medium text-slate-900">{v.name}</td>
+                        <td className="py-2.5 pr-2 text-right text-slate-600">{v.totalJob}</td>
+                        <td className="py-2.5 pr-2 text-right text-emerald-600">{v.selesai}</td>
+                        <td className="py-2.5 pr-2 text-right text-slate-600">{pct.toFixed(0)}%</td>
+                        <td className="py-2.5 pr-2 text-right font-semibold text-slate-900">{rupiah(v.pendapatan)}</td>
+                        <td className="py-2.5 text-right text-orange-600">{rupiah(v.outstanding)}</td>
+                      </tr>
+                    )
+                  })}
+                  {vendorPerformance.length === 0 && (
+                    <tr><td colSpan={7} className="py-6 text-center text-slate-400">Belum ada data.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── JENIS EDIT ──────────────────────────── */}
+      {tab === 'jenis' && (
+        <div className="space-y-4">
+          <div className="card p-4">
+            <div className="flex flex-wrap items-center gap-4">
+              {jenisDist.length === 0 && (
+                <div className="flex-1 text-center py-4 text-sm text-slate-400">Belum ada data jenis edit.</div>
+              )}
+              {jenisDist.map((d) => (
+                <div key={d.label} className="flex items-center gap-3 flex-1 min-w-[160px]">
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: d.color }} />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-slate-900">{d.label}</p>
+                    <p className="text-xs text-slate-500">{d.value} job</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Card title="Distribusi Job per Jenis Edit">
+              <Donut data={jenisDist} centerLabel="Jenis" centerValue={String(totalJobs)} />
+            </Card>
+            <Card title="Pendapatan per Jenis Edit">
+              <VBar data={jenisRevenue.map((d) => d.value)} colors={DONUT_PALETTE} labels={jenisRevenue.map((d) => d.label)} />
+            </Card>
+          </div>
+
+          <Card title="Rincian per Jenis Edit">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                    <th className="py-2 pr-2 font-medium">Jenis Edit</th>
+                    <th className="py-2 pr-2 font-medium text-right">Total Job</th>
+                    <th className="py-2 pr-2 font-medium text-right">Selesai</th>
+                    <th className="py-2 pr-2 font-medium text-right">Pendapatan</th>
+                    <th className="py-2 font-medium text-right">Rata-rata per Job</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {jenisDist.map((d) => {
+                    const selesai = jobs.filter((j) => j.jenis_edit === d.label && j.status_edit === 'Selesai').length
+                    const pendapatan = jobs.filter((j) => j.jenis_edit === d.label && j.status_bayar === 'Lunas').reduce((s, j) => s + j.harga, 0)
+                    const avg = d.value > 0 ? Math.round(pendapatan / d.value) : 0
+                    return (
+                      <tr key={d.label} className="hover:bg-slate-50/50">
+                        <td className="py-2.5 pr-2">
+                          <span className="flex items-center gap-2 font-medium text-slate-900">
+                            <span className="w-2.5 h-2.5 rounded-full" style={{ background: d.color }} /> {d.label}
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-2 text-right text-slate-600">{d.value}</td>
+                        <td className="py-2.5 pr-2 text-right text-emerald-600">{selesai}</td>
+                        <td className="py-2.5 pr-2 text-right font-semibold text-slate-900">{rupiah(pendapatan)}</td>
+                        <td className="py-2.5 text-right text-slate-600">{rupiah(avg)}</td>
+                      </tr>
+                    )
+                  })}
+                  {jenisDist.length === 0 && (
+                    <tr><td colSpan={5} className="py-6 text-center text-slate-400">Belum ada data.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── REVISI ──────────────────────────────── */}
+      {tab === 'revisi' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <Metric icon={<RotateCcw className="w-4 h-4" />} label="Total Revisi" value={String(revisionJobs.length)} accent="bg-amber-500/10" />
+            <Metric icon={<TrendingUp className="w-4 h-4" />} label="In Progress" value={String(revisionJobs.filter((j) => j.status_edit === 'Revisi').length)} accent="bg-orange-500/10" />
+            <Metric icon={<CheckCircle2 className="w-4 h-4" />} label="Done" value={String(revisionJobs.filter((j) => j.status_edit === 'Selesai').length)} accent="bg-emerald-500/10" />
+            <Metric icon={<Calendar className="w-4 h-4" />} label="Pending" value={String(revisionJobs.filter((j) => j.status_edit !== 'Revisi' && j.status_edit !== 'Selesai').length)} accent="bg-sky-500/10" />
+            <Metric icon={<AlertTriangle className="w-4 h-4" />} label="Avg Rate" value={totalJobs > 0 ? (revisionJobs.length / totalJobs).toFixed(2) : '0.00'} accent="bg-rose-500/10" />
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Card title="Tren Revisi">
+              <AreaChart data={revisionDaily.map((d) => d.count)} labels={revisionDaily.map((d) => d.label)} color="#f472b6" />
+            </Card>
+            <Card title="Status Revisi">
+              <Donut
+                data={[
+                  { label: 'Selesai', value: revisionJobs.filter((j) => j.status_edit === 'Selesai').length, color: '#10b981' },
+                  { label: 'Dalam Proses', value: revisionJobs.filter((j) => j.status_edit === 'Revisi').length, color: '#f97316' },
+                  { label: 'Pending', value: revisionJobs.filter((j) => j.status_edit !== 'Revisi' && j.status_edit !== 'Selesai').length, color: '#0ea5e9' },
+                ]}
+                centerLabel="Revisi" centerValue={String(revisionJobs.length)}
+              />
+            </Card>
+          </div>
+
+          <Card title="Detail Job Revisi">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                    <th className="py-2 pr-2 font-medium">Project</th>
+                    <th className="py-2 pr-2 font-medium">Vendor</th>
+                    <th className="py-2 pr-2 font-medium">Tipe</th>
+                    <th className="py-2 pr-2 font-medium">Deadline</th>
+                    <th className="py-2 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {revisionJobs.map((j) => (
+                    <tr key={j.nama_project + j.deadline + j.harga} className="hover:bg-slate-50/50">
+                      <td className="py-2.5 pr-2 font-medium text-slate-900">{j.nama_project}</td>
+                      <td className="py-2.5 pr-2 text-slate-600">{j.vendor?.nama ?? '—'}</td>
+                      <td className="py-2.5 pr-2 text-slate-600">{j.jenis_edit}</td>
+                      <td className="py-2.5 pr-2 text-slate-600">{j.deadline ? j.deadline.slice(8, 10) + '/' + j.deadline.slice(5, 7) + '/' + j.deadline.slice(0, 4) : '—'}</td>
+                      <td className="py-2.5">
+                        {j.status_edit === 'Selesai' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Done
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
+                            <AlertTriangle className="w-3.5 h-3.5" /> Pending
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {revisionJobs.length === 0 && (
+                    <tr><td colSpan={5} className="py-6 text-center text-slate-400">Tidak ada job revisi.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes growBar {
+          from { transform: scaleY(0); }
+          to { transform: scaleY(1); }
+        }
+      `}</style>
     </div>
   )
 }
