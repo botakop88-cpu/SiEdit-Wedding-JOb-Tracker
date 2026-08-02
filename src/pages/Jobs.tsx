@@ -514,13 +514,11 @@ export default function Jobs() {
                               </span>
                             </td>
                             <td className="py-3 px-4">
-                              {j.status_bayar === 'Belum Bayar' ? (
-                                <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
-                                  Belum Bayar
-                                </span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
-                              )}
+                              <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                j.status_bayar === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                              }`}>
+                                {j.status_bayar}
+                              </span>
                             </td>
                             <td className="py-3 px-4">
                               <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
