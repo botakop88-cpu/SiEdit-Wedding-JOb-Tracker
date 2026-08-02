@@ -4,7 +4,7 @@ import { Briefcase, CreditCard, CalendarClock, Wallet, Search, Download, CheckCi
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import type { Job } from '../lib/types'
-import { rupiah, todayStr } from '../lib/utils'
+import { rupiah, todayStr, timeAgo, formatDate } from '../lib/utils'
 
 interface Stats {
   totalJob: number
@@ -37,6 +37,9 @@ export default function Dashboard() {
   const [recentJobs, setRecentJobs] = useState<Job[]>([])
   const [stats, setStats] = useState<Stats>({ totalJob: 0, belumBayar: 0, deadlineHariIni: 0, pendapatanBulanIni: 0 })
   const [pendapatanBulanLalu, setPendapatanBulanLalu] = useState(0)
+  const [piutang, setPiutang] = useState(0)
+  const [summary, setSummary] = useState({ masuk: 0, sedangEdit: 0, revisi: 0, siapKirim: 0, vendorBayar: 0 })
+  const [progress, setProgress] = useState({ target: 0, selesai: 0, sisa: 0 })
   const [barData, setBarData] = useState<{ label: string; total: number }[]>([])
   const [lineData, setLineData] = useState<{ label: string; masuk: number; selesai: number }[]>([])
   const [statusCounts, setStatusCounts] = useState({ masuk: 0, sedangEdit: 0, revisi: 0, selesai: 0 })
@@ -60,18 +63,19 @@ export default function Dashboard() {
     d3.setDate(d3.getDate() + 3)
     const maxDeadline = d3.toISOString().slice(0, 10)
 
-    const [totalRes, belumBayarRes, deadlineRes, chartRes, deadlineJobsRes, recentRes, statusRes, lineRes, vendorRes] = await Promise.all([
+    const [totalRes, belumBayarRes, deadlineRes, chartRes, deadlineJobsRes, recentRes, statusRes, lineRes, vendorRes, piutangRes] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('status_bayar', 'Belum Bayar'),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('deadline', today),
       supabase.from('job').select('harga, tanggal_lunas').is('deleted_at', null).eq('status_bayar', 'Lunas').gte('tanggal_lunas', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
         .not('deadline', 'is', null).gte('deadline', today).lte('deadline', maxDeadline)
-        .not('status_edit', 'in', '("Selesai")').order('deadline').limit(3),
+        .not('status_edit', 'in', '("Selesai")').order('deadline').limit(10),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('created_at', { ascending: false }).limit(5),
       supabase.from('job').select('status_edit').is('deleted_at', null),
       supabase.from('job').select('created_at, status_edit, tanggal_lunas').is('deleted_at', null),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null),
+      supabase.from('job').select('harga').is('deleted_at', null).eq('status_bayar', 'Belum Bayar'),
     ])
 
     const chartRows = (chartRes.data ?? []) as { harga: number; tanggal_lunas: string | null }[]
@@ -125,11 +129,29 @@ export default function Dashboard() {
     const counts = { masuk: 0, sedangEdit: 0, revisi: 0, selesai: 0 }
     for (const s of statusData) {
       if (s.status_edit === 'Masuk') counts.masuk++
-      else if (s.status_edit === 'Sedang Diedit') counts.sedangEdit++
+      else if (s.status_edit === 'Sedang Edit') counts.sedangEdit++
       else if (s.status_edit === 'Revisi') counts.revisi++
       else if (s.status_edit === 'Selesai') counts.selesai++
     }
     setStatusCounts(counts)
+
+    const piutangRows = (piutangRes.data ?? []) as { harga: number }[]
+    setPiutang(piutangRows.reduce((sum, r) => sum + (r.harga || 0), 0))
+
+    const allRows = (lineRes.data ?? []) as { created_at: string | null; status_edit: string; tanggal_lunas: string | null }[]
+    const summary = { masuk: 0, sedangEdit: 0, revisi: 0, siapKirim: 0, vendorBayar: 0 }
+    for (const row of allRows) {
+      if (row.created_at?.startsWith(today)) summary.masuk++
+      if (row.tanggal_lunas?.startsWith(today)) summary.vendorBayar++
+      if (row.status_edit === 'Sedang Edit') summary.sedangEdit++
+      else if (row.status_edit === 'Revisi') summary.revisi++
+      else if (row.status_edit === 'Selesai') summary.siapKirim++
+    }
+    setSummary(summary)
+
+    const thisMonthCount = allRows.filter((r) => r.created_at?.startsWith(thisMonthKey)).length
+    const selesaiThisMonth = allRows.filter((r) => r.tanggal_lunas?.startsWith(thisMonthKey)).length
+    setProgress({ target: thisMonthCount, selesai: selesaiThisMonth, sisa: Math.max(thisMonthCount - selesaiThisMonth, 0) })
 
     setStats({
       totalJob: totalRes.count ?? 0,
@@ -206,7 +228,9 @@ export default function Dashboard() {
             <div className="flex-1 min-w-0">
               <p className="text-sm text-slate-500 font-medium mb-1">Total Job</p>
               <p className="text-2xl font-bold text-slate-900">{stats.totalJob}</p>
-              <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">↑ 4 dari minggu lalu</p>
+              <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> {stats.totalJob - stats.belumBayar} Lunas
+              </p>
             </div>
           </div>
         </div>
@@ -219,7 +243,7 @@ export default function Dashboard() {
             <div className="flex-1 min-w-0">
               <p className="text-sm text-slate-500 font-medium mb-1">Belum Bayar</p>
               <p className="text-2xl font-bold text-slate-900">{stats.belumBayar}</p>
-              <p className="text-xs text-orange-600 mt-1">Total {rupiah(stats.belumBayar * 135000)}</p>
+              <p className="text-xs text-orange-600 mt-1">Total {rupiah(piutang)}</p>
             </div>
           </div>
         </div>
@@ -271,8 +295,8 @@ export default function Dashboard() {
             <div className="space-y-1">
               {deadlineJobs.map((j, idx) => (
                 <div key={j.id} className="flex items-start gap-3">
-                  <div className="flex flex-col items-center shrink-0 w-12">
-                    <span className="text-sm font-bold text-slate-900">{j.deadline?.slice(8, 10) ?? '00'}:00</span>
+                  <div className="flex flex-col items-center shrink-0 w-16">
+                    <span className="text-[10px] font-bold text-slate-900 leading-tight text-center">{formatDate(j.deadline)}</span>
                     <div className="w-2 h-2 rounded-full bg-rose-500 mt-1" />
                     {idx < deadlineJobs.length - 1 && <div className="w-0.5 h-14 bg-slate-200 mt-1" />}
                   </div>
@@ -280,7 +304,7 @@ export default function Dashboard() {
                     <p className="font-semibold text-slate-900 text-sm">{j.nama_project}</p>
                     <p className="text-xs text-slate-500">Pernikahan {j.vendor?.nama ?? '-'}</p>
                     <span className="inline-block mt-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700">
-                      Edit Kolase
+                      {j.jenis_edit}
                     </span>
                   </div>
                   <button className="text-slate-400 hover:text-slate-600 shrink-0">→</button>
@@ -299,11 +323,11 @@ export default function Dashboard() {
             </select>
           </div>
           <div className="space-y-3">
-            <RingkasanItem icon={<Download className="w-5 h-5" />} label="Job Masuk" value="3" chipClass="bg-blue-50 text-blue-500" />
-            <RingkasanItem icon={<Edit3 className="w-5 h-5" />} label="Sedang Diedit" value="4" chipClass="bg-orange-50 text-orange-500" />
-            <RingkasanItem icon={<RefreshCw className="w-5 h-5" />} label="Revisi" value="2" chipClass="bg-purple-50 text-purple-500" />
-            <RingkasanItem icon={<Send className="w-5 h-5" />} label="Siap Dikirim" value="5" chipClass="bg-emerald-50 text-emerald-500" />
-            <RingkasanItem icon={<DollarSign className="w-5 h-5" />} label="Vendor Bayar" value="1" chipClass="bg-amber-50 text-amber-500" />
+            <RingkasanItem icon={<Download className="w-5 h-5" />} label="Job Masuk" value={String(summary.masuk)} chipClass="bg-blue-50 text-blue-500" />
+            <RingkasanItem icon={<Edit3 className="w-5 h-5" />} label="Sedang Diedit" value={String(summary.sedangEdit)} chipClass="bg-orange-50 text-orange-500" />
+            <RingkasanItem icon={<RefreshCw className="w-5 h-5" />} label="Revisi" value={String(summary.revisi)} chipClass="bg-purple-50 text-purple-500" />
+            <RingkasanItem icon={<Send className="w-5 h-5" />} label="Siap Dikirim" value={String(summary.siapKirim)} chipClass="bg-emerald-50 text-emerald-500" />
+            <RingkasanItem icon={<DollarSign className="w-5 h-5" />} label="Vendor Bayar" value={String(summary.vendorBayar)} chipClass="bg-amber-50 text-amber-500" />
           </div>
         </section>
 
@@ -313,46 +337,53 @@ export default function Dashboard() {
             <h2 className="font-bold text-slate-900">Progress Bulan Ini</h2>
             <button onClick={() => navigate('/reports')} className="text-sm text-rose-500 hover:text-rose-600 font-medium">Detail</button>
           </div>
-          <div className="flex items-center justify-center mb-6">
-            <div className="relative w-36 h-36">
-              <svg className="w-36 h-36 transform -rotate-90">
-                <circle cx="72" cy="72" r="60" fill="none" stroke="#e2e8f0" strokeWidth="12" />
-                <circle
-                  cx="72"
-                  cy="72"
-                  r="60"
-                  fill="none"
-                  stroke="#3b82f6"
-                  strokeWidth="12"
-                  strokeDasharray={`${60 * 2 * Math.PI * 0.71} ${60 * 2 * Math.PI}`}
-                  strokeLinecap="round"
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-2xl font-bold text-slate-900">71%</span>
-                <span className="text-xs text-slate-500">Selesai</span>
-              </div>
-            </div>
-          </div>
-          <div className="space-y-2.5 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-600">Target Bulan Ini</span>
-              <span className="font-bold text-slate-900">45 Job</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-blue-600">Selesai</span>
-              <span className="font-bold text-slate-900">32 Job</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-rose-600">Sisa</span>
-              <span className="font-bold text-slate-900">13 Job</span>
-            </div>
-          </div>
-          <div className="mt-4 flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="font-medium">Target tercapai 71%</span>
-          </div>
-          <p className="text-xs text-slate-500 mt-2">Pertahankan semangatmu!</p>
+          {(() => {
+            const pct = progress.target > 0 ? Math.round((progress.selesai / progress.target) * 100) : 0
+            return (
+              <>
+                <div className="flex items-center justify-center mb-6">
+                  <div className="relative w-36 h-36">
+                    <svg className="w-36 h-36 transform -rotate-90">
+                      <circle cx="72" cy="72" r="60" fill="none" stroke="#e2e8f0" strokeWidth="12" />
+                      <circle
+                        cx="72"
+                        cy="72"
+                        r="60"
+                        fill="none"
+                        stroke="#3b82f6"
+                        strokeWidth="12"
+                        strokeDasharray={`${60 * 2 * Math.PI * (pct / 100)} ${60 * 2 * Math.PI}`}
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-2xl font-bold text-slate-900">{pct}%</span>
+                      <span className="text-xs text-slate-500">Selesai</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2.5 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600">Job Masuk Bulan Ini</span>
+                    <span className="font-bold text-slate-900">{progress.target} Job</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-blue-600">Selesai</span>
+                    <span className="font-bold text-slate-900">{progress.selesai} Job</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-rose-600">Sisa</span>
+                    <span className="font-bold text-slate-900">{progress.sisa} Job</span>
+                  </div>
+                </div>
+                <div className="mt-4 flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span className="font-medium">Penyelesaian {pct}%</span>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">Pertahankan semangatmu!</p>
+              </>
+            )
+          })()}
         </section>
       </div>
 
@@ -389,9 +420,9 @@ export default function Dashboard() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-900 truncate">{j.nama_project}</p>
-                    <p className="text-xs text-slate-500">{j.jenis_edit}</p>
+                    <p className="text-xs text-slate-500 truncate">{j.jenis_edit} · {j.vendor?.nama ?? '-'}</p>
                   </div>
-                  <span className="text-xs text-slate-400 shrink-0">2 jam lalu</span>
+                  <span className="text-xs text-slate-400 shrink-0">{timeAgo(j.created_at)}</span>
                 </div>
               )
             })}

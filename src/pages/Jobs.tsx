@@ -459,6 +459,7 @@ export default function Jobs() {
                         </th>
                         <th className="text-left py-2 px-4 font-medium text-slate-500">Project</th>
                         <th className="text-left py-2 px-4 font-medium text-slate-500">Jenis</th>
+                        <th className="text-left py-2 px-4 font-medium text-slate-500">Harga</th>
                         <th className="text-left py-2 px-4 font-medium text-slate-500">Deadline</th>
                         <th className="text-left py-2 px-4 font-medium text-slate-500">Status</th>
                         <th className="text-left py-2 px-4 font-medium text-slate-500">Bayar</th>
@@ -487,6 +488,9 @@ export default function Jobs() {
                             </td>
                             <td className="py-3 px-4">
                               <span className="text-blue-600 font-medium">{j.jenis_edit}</span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="text-slate-800 font-semibold whitespace-nowrap">{rupiah(j.harga)}</span>
                             </td>
                             <td className="py-3 px-4">
                               {j.deadline ? (

@@ -414,15 +414,18 @@ export default function Reports() {
   }, [jobs])
 
   const vendorPerformance = useMemo(() => {
-    const map = new Map<string, { name: string; totalJob: number; pendapatan: number; outstanding: number; selesai: number }>()
-    for (const v of vendors) map.set(v.nama, { name: v.nama, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0 })
+    const map = new Map<string, { name: string; totalJob: number; pendapatan: number; outstanding: number; selesai: number; belumBayar: number }>()
+    for (const v of vendors) map.set(v.nama, { name: v.nama, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0, belumBayar: 0 })
     for (const j of jobs) {
       const name = j.vendor?.nama ?? 'Tanpa Vendor'
-      if (!map.has(name)) map.set(name, { name, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0 })
+      if (!map.has(name)) map.set(name, { name, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0, belumBayar: 0 })
       const s = map.get(name)!
       s.totalJob++
       if (j.status_bayar === 'Lunas') s.pendapatan += j.harga
-      else s.outstanding += j.harga
+      else {
+        s.outstanding += j.harga
+        s.belumBayar++
+      }
       if (j.status_edit === 'Selesai') s.selesai++
     }
     return Array.from(map.values()).sort((a, b) => b.pendapatan - a.pendapatan)
@@ -441,6 +444,15 @@ export default function Reports() {
   }, [jobs])
 
   const monthLabels = monthlyRevenue.map((m) => m.label.split(' ')[0])
+
+  const maxPendapatan = monthlyRevenue.reduce((m, r) => Math.max(m, r.total), 0)
+
+  const monthlyJobs = useMemo(() => {
+    return monthList.map(({ year, month }) => {
+      const key = `${year}-${String(month + 1).padStart(2, '0')}`
+      return jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === key).length
+    })
+  }, [jobs, monthList])
 
   const trendSeries = [
     { label: 'Selesai', color: '#10b981', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.tanggal_lunas ?? '').startsWith(m.label.replace(' ', '-')) && j.status_edit === 'Selesai').length) },
@@ -486,10 +498,12 @@ export default function Reports() {
       const [y, m, d] = v.split('-')
       return y && m && d ? `${d}/${m}/${y}` : v
     }
-    const rows = jobs.map((j) => [
+    const exportJobs = jobs.filter((j) => j.status_bayar === 'Lunas')
+    const rows = exportJobs.map((j) => [
       j.nama_project, j.vendor?.nama ?? '-', j.jenis_edit, fmtHarga(j.harga), fmtDate(j.deadline),
       j.status_edit, j.status_bayar, j.status_cetak, fmtDate(j.tanggal_lunas), j.catatan ? String(j.catatan) : '-',
     ])
+    const totalLunas = exportJobs.reduce((s, j) => s + j.harga, 0)
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('Laporan SiEdit')
     const periode = `${monthList[0]?.label ?? ''} — ${monthList[monthList.length - 1]?.label ?? ''}`
@@ -511,10 +525,10 @@ export default function Reports() {
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE11D48' } }
     rows.forEach((r) => sheet.addRow(r))
-    const totalRow = sheet.addRow(['TOTAL', '', `${totalJobs} job`, fmtHarga(totalPendapatan), '', '', '', '', '', ''])
+    const totalRow = sheet.addRow(['TOTAL', '', `${exportJobs.length} job`, fmtHarga(totalLunas), '', '', '', '', '', ''])
     totalRow.font = { bold: true }
     totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1F2' } }
-    const allRows = [cols, ...rows, ['TOTAL', '', `${totalJobs} job`, fmtHarga(totalPendapatan), '', '', '', '', '', '']]
+    const allRows = [cols, ...rows, ['TOTAL', '', `${exportJobs.length} job`, fmtHarga(totalLunas), '', '', '', '', '', '']]
     cols.forEach((_, ci) => {
       const maxLen = allRows.reduce((m, r) => Math.max(m, String(r[ci] ?? '').length), cols[ci].length)
       sheet.getColumn(ci + 1).width = ci === 9 ? Math.min(Math.max(maxLen + 2, 15), 60) : Math.min(Math.max(maxLen + 2, 10), 45)
@@ -768,6 +782,58 @@ export default function Reports() {
             </div>
           </div>
 
+          <Card title="Rincian Bulanan">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-100">
+                    <th className="py-2 pr-2 font-medium">Bulan</th>
+                    <th className="py-2 pr-2 font-medium text-right">Job</th>
+                    <th className="py-2 pr-2 font-medium text-right">Pendapatan</th>
+                    <th className="py-2 pr-2 font-medium text-right">vs Sebelumnya</th>
+                    <th className="py-2 font-medium">Indikator</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {monthlyRevenue.map((m, i) => {
+                    const prev = i > 0 ? monthlyRevenue[i - 1].total : null
+                    const momPct = prev && prev > 0 ? ((m.total - prev) / prev) * 100 : null
+                    const pct = maxPendapatan > 0 ? (m.total / maxPendapatan) * 100 : 0
+                    return (
+                      <tr key={m.label} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-2.5 pr-2 font-medium text-slate-700">{m.label}</td>
+                        <td className="py-2.5 pr-2 text-right text-slate-600">{monthlyJobs[i]}</td>
+                        <td className="py-2.5 pr-2 text-right font-medium text-slate-800">{rupiah(m.total)}</td>
+                        <td className="py-2.5 pr-2 text-right">
+                          {momPct !== null ? (
+                            <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${momPct >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                              {momPct >= 0 ? '↑' : '↓'} {Math.abs(momPct).toFixed(0)}%
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-300">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5">
+                          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full bg-gradient-to-r from-rose-300 to-rose-500" style={{ width: `${Math.max(pct, m.total > 0 ? 4 : 2)}%` }} />
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 border-t-2 border-slate-200">
+                    <td className="py-3 pr-2 text-sm font-bold text-slate-800">TOTAL</td>
+                    <td className="py-3 pr-2 text-right text-sm font-bold text-slate-800">{totalJobs}</td>
+                    <td className="py-3 pr-2 text-right text-sm font-bold text-slate-800">{rupiah(totalPendapatan)}</td>
+                    <td className="py-3" colSpan={2} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </Card>
+
           <div className="grid lg:grid-cols-2 gap-4">
             <Card title="Pendapatan per Bulan">
               <VBar
@@ -819,7 +885,7 @@ export default function Reports() {
                       <td className="py-2.5 pr-2 font-medium text-slate-900">{v.name}</td>
                       <td className="py-2.5 pr-2 text-right text-slate-600">{v.totalJob}</td>
                       <td className="py-2.5 pr-2 text-right font-semibold text-emerald-600">{rupiah(v.pendapatan)}</td>
-                      <td className="py-2.5 pr-2 text-right text-amber-600">{rupiah(v.outstanding)}</td>
+                      <td className="py-2.5 pr-2 text-right text-amber-600">{v.belumBayar} job</td>
                       <td className="py-2.5 text-right text-orange-600">{rupiah(v.outstanding)}</td>
                     </tr>
                   ))}
