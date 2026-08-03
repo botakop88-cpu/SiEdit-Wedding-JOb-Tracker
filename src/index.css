@@ -74,6 +74,11 @@ body {
   @apply w-full border border-slate-300 bg-white rounded-xl px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500/40 focus:border-rose-500 transition-shadow;
 }
 
+/* Variant tanpa w-full untuk dipakai di flex row (mis. baris produk/harga) */
+.input-base-nofull {
+  @apply border border-slate-300 bg-white rounded-xl px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500/40 focus:border-rose-500 transition-shadow;
+}
+
 /* Micro uppercase label for KPI / section headers */
 .micro-label {
   @apply text-[11px] font-semibold uppercase tracking-wider text-slate-500;

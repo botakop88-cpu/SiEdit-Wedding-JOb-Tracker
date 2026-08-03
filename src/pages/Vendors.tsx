@@ -569,7 +569,7 @@ export default function Vendors() {
                         value={item.nama_produk}
                         onChange={(e) => updatePriceItem(idx, 'nama_produk', e.target.value)}
                         placeholder="Nama produk (contoh: Kolase 3x4)"
-                        className="flex-1 min-w-0 input-base"
+                        className="flex-1 min-w-0 input-base-nofull"
                       />
                       <input
                         type="text"
@@ -577,7 +577,7 @@ export default function Vendors() {
                         value={item.harga ? formatRibuan(item.harga) : ''}
                         onChange={(e) => updatePriceItem(idx, 'harga', parseRibuan(e.target.value))}
                         placeholder="Harga"
-                        className="w-28 shrink-0 input-base"
+                        className="w-28 shrink-0 input-base-nofull"
                       />
                       <button type="button" onClick={() => removePriceItem(idx)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0">
                         <Trash2 className="w-4 h-4" />
