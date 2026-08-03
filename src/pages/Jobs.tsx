@@ -37,6 +37,7 @@ export default function Jobs() {
   const [filterVendor, setFilterVendor] = useState('Semua Vendor')
   const [filterJenis, setFilterJenis] = useState('Semua Jenis')
   const [filterDeadline, setFilterDeadline] = useState('')
+  const [quickFilter, setQuickFilter] = useState('Semua')
   const deadlinePickerRef = useRef<HTMLInputElement>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -85,8 +86,19 @@ export default function Jobs() {
     if (filterVendor !== 'Semua Vendor') result = result.filter((j) => j.vendor?.nama === filterVendor)
     if (filterJenis !== 'Semua Jenis') result = result.filter((j) => j.jenis_edit === filterJenis)
     if (filterDeadline) result = result.filter((j) => j.deadline === filterDeadline)
+    if (quickFilter === 'Belum Bayar') result = result.filter((j) => j.status_bayar === 'Belum Bayar')
+    else if (quickFilter === 'Lunas') result = result.filter((j) => j.status_bayar === 'Lunas')
+    else if (quickFilter === 'Deadline ≤ 3 Hari') {
+      result = result.filter((j) => {
+        if (!j.deadline) return false
+        const d = daysUntil(j.deadline)
+        return d >= 0 && d <= 3
+      })
+    }
+    else if (quickFilter === 'Sudah Cetak') result = result.filter((j) => j.status_cetak === 'Sudah Cetak')
+    else if (quickFilter === 'Belum Cetak') result = result.filter((j) => j.status_cetak === 'Belum Cetak')
     return result
-  }, [jobs, search, filterStatus, filterVendor, filterJenis, filterDeadline])
+  }, [jobs, search, filterStatus, filterVendor, filterJenis, filterDeadline, quickFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
 
@@ -379,7 +391,7 @@ export default function Jobs() {
               </button>
             )}
           </div>
-          {(filterDeadline || search || filterStatus !== 'Semua Status' || filterVendor !== 'Semua Vendor' || filterJenis !== 'Semua Jenis') && (
+          {(filterDeadline || search || filterStatus !== 'Semua Status' || filterVendor !== 'Semua Vendor' || filterJenis !== 'Semua Jenis' || quickFilter !== 'Semua') && (
             <button
               onClick={() => {
                 setSearch('')
@@ -387,6 +399,7 @@ export default function Jobs() {
                 setFilterVendor('Semua Vendor')
                 setFilterJenis('Semua Jenis')
                 setFilterDeadline('')
+                setQuickFilter('Semua')
                 setPage(1)
               }}
               className="text-xs text-rose-500 hover:text-rose-600 font-medium"
@@ -394,6 +407,29 @@ export default function Jobs() {
               Reset
             </button>
           )}
+        </div>
+
+        {/* Quick filters */}
+        <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-slate-100">
+          {['Semua', 'Belum Bayar', 'Lunas', 'Deadline ≤ 3 Hari', 'Sudah Cetak', 'Belum Cetak'].map((f) => (
+            <button
+              key={f}
+              onClick={() => { setQuickFilter(f); setPage(1) }}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                quickFilter === f
+                  ? 'bg-rose-500 text-white'
+                  : f === 'Belum Bayar'
+                    ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                    : f === 'Lunas'
+                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      : f === 'Deadline ≤ 3 Hari'
+                        ? 'bg-red-50 text-red-700 hover:bg-red-100'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -449,7 +485,8 @@ export default function Jobs() {
 
               {/* Job table */}
               {!isCollapsed && (
-                <div className="overflow-x-auto">
+                <>
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-slate-100 bg-slate-50/30">
@@ -592,6 +629,66 @@ export default function Jobs() {
                     </div>
                   )}
                 </div>
+
+                {/* Mobile cards */}
+                <div className="md:hidden divide-y divide-slate-100">
+                  {vendorJobs.map((j) => {
+                    const dl = deadlineLabel(j.deadline, j.status_cetak)
+                    return (
+                      <div key={j.id} className="p-4 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={selected.has(j.id)}
+                              onChange={() => toggleSelect(j.id)}
+                              className="mt-1 w-4 h-4 rounded border-slate-300 text-rose-500 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <p className="font-medium text-sm text-slate-900 truncate">{j.nama_project}</p>
+                              <p className="text-xs text-slate-400">{j.jenis_edit} · {rupiah(j.harga)}</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-1 shrink-0">
+                            <button onClick={() => openEdit(j)} className="p-1.5 text-slate-400 hover:text-blue-600">
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => deleteJob(j)} className="p-1.5 text-slate-400 hover:text-red-600">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 pl-6">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
+                            j.status_edit === 'Masuk' ? 'bg-blue-100 text-blue-700' :
+                            j.status_edit === 'Sedang Edit' ? 'bg-orange-100 text-orange-700' :
+                            j.status_edit === 'Revisi' ? 'bg-purple-100 text-purple-700' :
+                            'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {j.status_edit}
+                          </span>
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
+                            j.status_bayar === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {j.status_bayar}
+                          </span>
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
+                            j.status_cetak === 'Sudah Cetak' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {j.status_cetak}
+                          </span>
+                          {j.deadline && (
+                            <span className={`inline-flex items-center gap-1 text-xs font-medium ${dl.color}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${dl.dot}`} />
+                              {dl.label ? `${dl.label} · ` : ''}{formatDate(j.deadline)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                </>
               )}
             </div>
           )
