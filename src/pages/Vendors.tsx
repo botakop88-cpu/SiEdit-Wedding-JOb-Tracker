@@ -238,6 +238,23 @@ export default function Vendors() {
   }
 
   async function deleteVendor(vendor: Vendor) {
+    const { count, error: countErr } = await supabase
+      .from('job')
+      .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null)
+      .eq('vendor_id', vendor.id)
+    if (countErr) {
+      toast({ type: 'error', title: 'Gagal cek job vendor', message: countErr.message })
+      return
+    }
+    if ((count ?? 0) > 0) {
+      toast({
+        type: 'error',
+        title: 'Vendor masih memiliki job aktif',
+        message: `${count} job masih terkait. Pindahkan/hapus job dulu.`,
+      })
+      return
+    }
     const ok = await confirm({ title: 'Hapus vendor ini?', message: `"${vendor.nama}" akan dipindahkan ke Recycle Bin.`, confirmLabel: 'Hapus', danger: true })
     if (!ok) return
     const { error } = await supabase.from('vendor').update({ deleted_at: new Date().toISOString() }).eq('id', vendor.id)
@@ -547,7 +564,7 @@ export default function Vendors() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={saveVendor} className="p-5 space-y-4">
+            <form onSubmit={saveVendor} className="p-5 space-y-4 pb-16 sm:pb-5">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Nama Vendor</label>
                 <input type="text" value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required className="input-base" placeholder="Nama studio / vendor" />
