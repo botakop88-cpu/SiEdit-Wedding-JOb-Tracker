@@ -273,10 +273,13 @@ export default function Jobs() {
     loadData()
   }
 
-  function deadlineLabel(deadline: string | null): { label: string; color: string; dot: string } {
+  function deadlineLabel(deadline: string | null, statusCetak?: string): { label: string; color: string; dot: string } {
     if (!deadline) return { label: '', color: '', dot: '' }
     const days = daysUntil(deadline)
-    if (days < 0) return { label: 'Terlambat', color: 'text-red-600', dot: 'bg-red-600' }
+    if (days < 0) {
+      if (statusCetak === 'Sudah Cetak') return { label: 'Tepat Waktu', color: 'text-emerald-600', dot: 'bg-emerald-500' }
+      return { label: 'Terlambat', color: 'text-red-600', dot: 'bg-red-600' }
+    }
     if (days === 0) return { label: 'Hari Ini', color: 'text-red-600', dot: 'bg-red-600' }
     if (days === 1) return { label: 'Besok', color: 'text-orange-600', dot: 'bg-orange-500' }
     if (days === 2) return { label: '2 Hari Lagi', color: 'text-yellow-600', dot: 'bg-yellow-500' }
@@ -469,7 +472,7 @@ export default function Jobs() {
                     </thead>
                     <tbody className="divide-y divide-slate-50">
                       {vendorJobs.map((j) => {
-                        const dl = deadlineLabel(j.deadline)
+                        const dl = deadlineLabel(j.deadline, j.status_cetak)
                         return (
                           <tr key={j.id} className="hover:bg-slate-50/50">
                             <td className="py-3 px-4">
