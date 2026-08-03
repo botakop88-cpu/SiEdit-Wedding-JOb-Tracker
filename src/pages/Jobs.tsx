@@ -46,7 +46,7 @@ export default function Jobs() {
   const [saving, setSaving] = useState(false)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(100)
   const searchRef = useRef<HTMLInputElement>(null)
   const prevStatusRef = useRef<Record<string, { status_edit: StatusEdit; status_bayar: StatusBayar; status_cetak: StatusCetak }>>({})
 
@@ -613,9 +613,9 @@ export default function Jobs() {
             onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
             className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white"
           >
-            <option value={10}>10 / halaman</option>
-            <option value={25}>25 / halaman</option>
-            <option value={50}>50 / halaman</option>
+            <option value={100}>100 / halaman</option>
+            <option value={150}>150 / halaman</option>
+            <option value={200}>200 / halaman</option>
           </select>
           <div className="flex items-center gap-1">
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
