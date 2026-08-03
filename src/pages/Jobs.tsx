@@ -45,6 +45,7 @@ export default function Jobs() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number; up: boolean } | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(100)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -536,23 +537,40 @@ export default function Jobs() {
                             </td>
                             <td className="py-3 px-4 text-center relative">
                               <button
-                                onClick={() => setMenuFor(menuFor === j.id ? null : j.id)}
+                                onClick={(e) => {
+                                  if (menuFor === j.id) {
+                                    setMenuFor(null)
+                                    setMenuPos(null)
+                                    return
+                                  }
+                                  setMenuFor(j.id)
+                                  const rect = e.currentTarget.getBoundingClientRect()
+                                  const menuH = 96
+                                  setMenuPos({
+                                    top: rect.bottom + 4,
+                                    right: Math.max(8, window.innerWidth - rect.right),
+                                    up: rect.bottom + menuH > window.innerHeight,
+                                  })
+                                }}
                                 className="p-1 hover:bg-slate-200 rounded"
                               >
                                 <MoreVertical className="w-4 h-4 text-slate-400" />
                               </button>
-                              {menuFor === j.id && (
+                              {menuFor === j.id && menuPos && (
                                 <>
-                                  <div className="fixed inset-0 z-40" onClick={() => setMenuFor(null)} />
-                                  <div className="absolute right-4 top-10 z-50 bg-white border border-slate-200 rounded-xl shadow-lg py-1 w-40">
+                                  <div className="fixed inset-0 z-40" onClick={() => { setMenuFor(null); setMenuPos(null) }} />
+                                  <div
+                                    className="fixed z-50 bg-white border border-slate-200 rounded-xl shadow-lg py-1 w-40"
+                                    style={menuPos.up ? { right: menuPos.right, bottom: window.innerHeight - menuPos.top + 8 } : { right: menuPos.right, top: menuPos.top }}
+                                  >
                                     <button
-                                      onClick={() => openEdit(j)}
+                                      onClick={() => { setMenuFor(null); setMenuPos(null); openEdit(j) }}
                                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
                                     >
                                       <Pencil className="w-4 h-4" /> Edit
                                     </button>
                                     <button
-                                      onClick={() => deleteJob(j)}
+                                      onClick={() => { setMenuFor(null); setMenuPos(null); deleteJob(j) }}
                                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
                                     >
                                       <Trash2 className="w-4 h-4" /> Hapus
