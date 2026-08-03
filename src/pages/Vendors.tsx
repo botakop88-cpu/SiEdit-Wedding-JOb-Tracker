@@ -1,23 +1,28 @@
 import { useEffect, useState, useMemo, useRef, type FormEvent } from 'react'
-import { Plus, Search, Grid3x3, List, Phone, Pencil, MoreVertical, Trash2 } from 'lucide-react'
+import { Plus, Search, Grid3x3, List, Phone, Pencil, MoreVertical, Trash2, X } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { useAuth } from '../lib/AuthContext'
 import { useToast } from '../lib/ToastContext'
-import type { Vendor } from '../lib/types'
-import { rupiah } from '../lib/utils'
+import type { Vendor, VendorPriceItem } from '../lib/types'
+import { rupiah, formatRibuan, parseRibuan, validateWhatsApp } from '../lib/utils'
+
+interface VendorStats extends Vendor {
+  price_items?: VendorPriceItem[]
+}
 
 const EMPTY_FORM = {
   nama: '',
   whatsapp: '',
-  harga_kolase_sudah_pilih: 35000,
-  harga_kolase_belum_pilih: 50000,
-  harga_edit_full: 135000,
 }
+
+const MAX_PRODUCTS = 15
 
 const VENDOR_COLORS = ['bg-orange-600', 'bg-purple-600', 'bg-slate-900', 'bg-pink-500', 'bg-blue-600', 'bg-teal-600', 'bg-indigo-600']
 
 export default function Vendors() {
+  const { user } = useAuth()
   const { toast, confirm } = useToast()
-  const [vendors, setVendors] = useState<Vendor[]>([])
+  const [vendors, setVendors] = useState<VendorStats[]>([])
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -25,8 +30,9 @@ export default function Vendors() {
   const [sortOrder, setSortOrder] = useState('A - Z')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [modal, setModal] = useState(false)
-  const [editing, setEditing] = useState<Vendor | null>(null)
+  const [editing, setEditing] = useState<VendorStats | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
+  const [priceItems, setPriceItems] = useState<{ nama_produk: string; harga: number }[]>([])
   const [saving, setSaving] = useState(false)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -46,11 +52,19 @@ export default function Vendors() {
 
   async function loadData() {
     setLoading(true)
-    const [vRes, jRes] = await Promise.all([
+    const [vRes, jRes, piRes] = await Promise.all([
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
       supabase.from('job').select('id, vendor_id, harga, status_edit, status_bayar').is('deleted_at', null),
+      supabase.from('vendor_price_item').select('*').order('urutan'),
     ])
-    if (vRes.data) setVendors(vRes.data as Vendor[])
+    if (vRes.data) {
+      const priceByVendor = new Map<string, VendorPriceItem[]>()
+      for (const pi of (piRes.data ?? []) as VendorPriceItem[]) {
+        if (!priceByVendor.has(pi.vendor_id)) priceByVendor.set(pi.vendor_id, [])
+        priceByVendor.get(pi.vendor_id)!.push(pi)
+      }
+      setVendors((vRes.data as Vendor[]).map((v) => ({ ...v, price_items: priceByVendor.get(v.id) ?? [] })))
+    }
     if (jRes.data) setJobs(jRes.data)
     setLoading(false)
   }
@@ -106,40 +120,121 @@ export default function Vendors() {
   function openNew() {
     setEditing(null)
     setForm(EMPTY_FORM)
+    setPriceItems([])
     setModal(true)
   }
 
-  function openEdit(vendor: Vendor) {
+  function openEdit(vendor: VendorStats) {
     setEditing(vendor)
     setForm({
       nama: vendor.nama,
       whatsapp: vendor.whatsapp ?? '',
-      harga_kolase_sudah_pilih: vendor.harga_kolase_sudah_pilih,
-      harga_kolase_belum_pilih: vendor.harga_kolase_belum_pilih,
-      harga_edit_full: vendor.harga_edit_full,
     })
+    setPriceItems(
+      (vendor.price_items ?? []).map((pi) => ({ nama_produk: pi.nama_produk, harga: pi.harga }))
+    )
     setModal(true)
+  }
+
+  function addPriceItem() {
+    setPriceItems((prev) => [...prev, { nama_produk: '', harga: 0 }])
+  }
+
+  function removePriceItem(idx: number) {
+    setPriceItems((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  function updatePriceItem(idx: number, field: 'nama_produk' | 'harga', value: string | number) {
+    setPriceItems((prev) => {
+      const next = [...prev]
+      next[idx] = { ...next[idx], [field]: value }
+      return next
+    })
+  }
+
+  async function syncPriceItems(vendorId: string, items: { nama_produk: string; harga: number }[]) {
+    if (!user) throw new Error('Session tidak valid.')
+
+    const { error: delErr } = await supabase
+      .from('vendor_price_item')
+      .delete()
+      .eq('vendor_id', vendorId)
+      .eq('user_id', user.id)
+    if (delErr) throw new Error('Gagal hapus produk lama: ' + delErr.message)
+
+    if (items.length === 0) return
+
+    const { error: insErr } = await supabase.from('vendor_price_item').insert(
+      items.map((item, idx) => ({
+        vendor_id: vendorId,
+        user_id: user.id,
+        nama_produk: item.nama_produk,
+        harga: item.harga,
+        urutan: idx,
+      }))
+    )
+    if (insErr) throw new Error('Gagal simpan produk: ' + insErr.message)
   }
 
   async function saveVendor(e: FormEvent) {
     e.preventDefault()
-    if (!form.nama) {
+    if (!user) {
+      toast({ type: 'error', title: 'Session tidak valid', message: 'Silakan refresh halaman.' })
+      return
+    }
+    if (!form.nama.trim()) {
       toast({ type: 'error', title: 'Nama vendor wajib diisi' })
       return
     }
-    setSaving(true)
-    const payload = { ...form, user_id: (await supabase.auth.getUser()).data.user?.id }
-    const { error } = editing
-      ? await supabase.from('vendor').update(payload).eq('id', editing.id)
-      : await supabase.from('vendor').insert([payload])
-    setSaving(false)
-    if (error) {
-      toast({ type: 'error', title: 'Gagal menyimpan', message: error.message })
+    if (form.whatsapp.trim() && !validateWhatsApp(form.whatsapp)) {
+      toast({ type: 'error', title: 'Nomor WhatsApp tidak valid', message: 'Gunakan 10–15 digit angka.' })
       return
     }
+    const validItems = priceItems.filter((p) => p.nama_produk.trim())
+    if (validItems.length > MAX_PRODUCTS) {
+      toast({ type: 'error', title: 'Terlalu banyak produk', message: `Maksimal ${MAX_PRODUCTS} produk per vendor.` })
+      return
+    }
+    setSaving(true)
+
+    const payload = {
+      user_id: user.id,
+      nama: form.nama.trim(),
+      whatsapp: form.whatsapp.trim() || null,
+      updated_at: new Date().toISOString(),
+    }
+
+    let vendorId: string | null = editing?.id ?? null
+    let error: any
+
+    if (editing) {
+      ;({ error } = await supabase.from('vendor').update(payload).eq('id', editing.id))
+    } else {
+      const { data, error: insErr } = await supabase.from('vendor').insert(payload).select('id').single()
+      error = insErr
+      if (data) vendorId = data.id
+    }
+
+    if (error) {
+      toast({ type: 'error', title: 'Gagal menyimpan vendor', message: error.message })
+      setSaving(false)
+      return
+    }
+
+    if (vendorId) {
+      try {
+        await syncPriceItems(vendorId, validItems)
+      } catch (syncErr: any) {
+        toast({ type: 'error', title: 'Gagal menyimpan daftar produk', message: syncErr?.message })
+        setSaving(false)
+        return
+      }
+    }
+
     toast({ type: 'success', title: editing ? 'Vendor diperbarui' : 'Vendor ditambahkan' })
     setModal(false)
-    loadData()
+    await loadData()
+    setSaving(false)
   }
 
   async function deleteVendor(vendor: Vendor) {
@@ -220,6 +315,7 @@ export default function Vendors() {
           const pct = stats.jobCount > 0 ? (stats.selesai / stats.jobCount) * 100 : 0
           const color = VENDOR_COLORS[idx % VENDOR_COLORS.length]
           const initials = v.nama.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+          const priceItems = v.price_items ?? []
 
           if (viewMode === 'list') {
             return (
@@ -269,6 +365,18 @@ export default function Vendors() {
                     </button>
                   </div>
                 </div>
+                {priceItems.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-slate-100">
+                    {priceItems.slice(0, 4).map((pi) => (
+                      <span key={pi.id} className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-full px-2 py-0.5">
+                        {pi.nama_produk}: {rupiah(pi.harga)}
+                      </span>
+                    ))}
+                    {priceItems.length > 4 && (
+                      <span className="text-xs text-slate-400 italic">+{priceItems.length - 4} lainnya</span>
+                    )}
+                  </div>
+                )}
               </div>
             )
           }
@@ -347,20 +455,23 @@ export default function Vendors() {
                 </div>
               </div>
 
-              {/* Pricing */}
-              <div className="space-y-1.5 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600">Kolase Sudah</span>
-                  <span className="font-semibold text-slate-900">{rupiah(v.harga_kolase_sudah_pilih)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600">Kolase Belum</span>
-                  <span className="font-semibold text-slate-900">{rupiah(v.harga_kolase_belum_pilih)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600">Edit Full</span>
-                  <span className="font-semibold text-slate-900">{rupiah(v.harga_edit_full)}</span>
-                </div>
+              {/* Price items */}
+              <div className="text-xs text-slate-500 space-y-1 border-t border-slate-100 pt-3">
+                {priceItems.length > 0 ? (
+                  <>
+                    {priceItems.slice(0, 3).map((pi) => (
+                      <div key={pi.id} className="flex items-center justify-between gap-2">
+                        <span className="truncate">{pi.nama_produk}</span>
+                        <span className="font-semibold text-slate-700 shrink-0">{rupiah(pi.harga)}</span>
+                      </div>
+                    ))}
+                    {priceItems.length > 3 && (
+                      <p className="italic text-slate-400">+{priceItems.length - 3} lainnya</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="italic text-slate-400">Belum ada produk</p>
+                )}
               </div>
             </div>
           )
@@ -428,40 +539,75 @@ export default function Vendors() {
 
       {/* Modal */}
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-          <form onSubmit={saveVendor} className="card p-5 w-full max-w-lg">
-            <h2 className="text-base font-bold text-slate-900 mb-4">{editing ? 'Edit Vendor' : 'Tambah Vendor'}</h2>
-            <div className="space-y-3">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:p-4">
+          <div className="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 sticky top-0 bg-white z-10">
+              <h2 className="text-base font-bold text-slate-900">{editing ? 'Edit Vendor' : 'Tambah Vendor'}</h2>
+              <button onClick={() => setModal(false)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={saveVendor} className="p-5 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Nama Vendor</label>
-                <input type="text" value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required className="input-base" />
+                <input type="text" value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required className="input-base" placeholder="Nama studio / vendor" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp</label>
                 <input type="text" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} className="input-base" placeholder="08xx xxxx xxxx" />
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Kolase Sudah</label>
-                  <input type="number" value={form.harga_kolase_sudah_pilih} onChange={(e) => setForm({ ...form, harga_kolase_sudah_pilih: Number(e.target.value) })} className="input-base" />
+
+              {/* Dynamic price items */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-slate-700">Daftar Produk / Harga</label>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Kolase Belum</label>
-                  <input type="number" value={form.harga_kolase_belum_pilih} onChange={(e) => setForm({ ...form, harga_kolase_belum_pilih: Number(e.target.value) })} className="input-base" />
+                <div className="space-y-2">
+                  {priceItems.map((item, idx) => (
+                    <div key={idx} className="flex gap-2 items-start">
+                      <input
+                        value={item.nama_produk}
+                        onChange={(e) => updatePriceItem(idx, 'nama_produk', e.target.value)}
+                        placeholder="Nama produk (contoh: Kolase 3x4)"
+                        className="flex-1 min-w-0 input-base"
+                      />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={item.harga ? formatRibuan(item.harga) : ''}
+                        onChange={(e) => updatePriceItem(idx, 'harga', parseRibuan(e.target.value))}
+                        placeholder="Harga"
+                        className="w-28 shrink-0 input-base"
+                      />
+                      <button type="button" onClick={() => removePriceItem(idx)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Edit Full</label>
-                  <input type="number" value={form.harga_edit_full} onChange={(e) => setForm({ ...form, harga_edit_full: Number(e.target.value) })} className="input-base" />
-                </div>
+                <button
+                  type="button"
+                  onClick={addPriceItem}
+                  disabled={priceItems.length >= MAX_PRODUCTS}
+                  className={`mt-2 flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                    priceItems.length >= MAX_PRODUCTS
+                      ? 'text-slate-300 cursor-not-allowed'
+                      : 'text-rose-600 hover:bg-rose-50'
+                  }`}
+                >
+                  <Plus className="w-3 h-3" /> Tambah Produk
+                  {priceItems.length >= MAX_PRODUCTS && ' (maksimal 15)'}
+                </button>
               </div>
-            </div>
-            <div className="flex gap-3 mt-5">
-              <button type="button" onClick={() => setModal(false)} className="flex-1 btn-secondary justify-center">Batal</button>
-              <button type="submit" disabled={saving} className="flex-1 btn-primary justify-center">
-                {saving ? 'Menyimpan...' : 'Simpan'}
-              </button>
-            </div>
-          </form>
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setModal(false)} className="flex-1 btn-secondary justify-center">Batal</button>
+                <button type="submit" disabled={saving} className="flex-1 btn-primary justify-center">
+                  {saving ? 'Menyimpan...' : 'Simpan'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -37,6 +37,19 @@ export function timeAgo(dateStr: string): string {
   return `${days} hari yang lalu`
 }
 
+// ─── Ribuan formatting (input harga) ────────────────────────────
+
+export function formatRibuan(value: number | string): string {
+  const num = typeof value === 'string' ? parseInt(value.replace(/[^\d]/g, ''), 10) : value
+  if (isNaN(num) || num === 0) return ''
+  return num.toLocaleString('id-ID')
+}
+
+export function parseRibuan(value: string): number {
+  const digits = value.replace(/[^\d]/g, '')
+  return digits ? parseInt(digits, 10) : 0
+}
+
 // ─── WhatsApp validation (vendor contact) ───────────────────────
 
 export function validateWhatsApp(value: string): boolean {

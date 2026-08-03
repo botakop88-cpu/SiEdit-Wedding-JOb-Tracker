@@ -33,6 +33,17 @@ export interface Job {
   vendor?: Pick<Vendor, 'nama'> | null
 }
 
+export interface VendorPriceItem {
+  id: string
+  vendor_id: string
+  user_id: string
+  nama_produk: string
+  harga: number
+  urutan: number
+  created_at: string
+  updated_at: string | null
+}
+
 export interface Invoice {
   id: string
   user_id: string
