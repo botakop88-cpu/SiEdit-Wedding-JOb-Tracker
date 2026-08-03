@@ -97,6 +97,18 @@ export default function Jobs() {
     }
     else if (quickFilter === 'Sudah Cetak') result = result.filter((j) => j.status_cetak === 'Sudah Cetak')
     else if (quickFilter === 'Belum Cetak') result = result.filter((j) => j.status_cetak === 'Belum Cetak')
+
+    result = [...result].sort((a, b) => {
+      if (a.status_bayar !== b.status_bayar) {
+        return a.status_bayar === 'Belum Bayar' ? -1 : 1
+      }
+      const editOrder: Record<string, number> = { 'Masuk': 0, 'Sedang Edit': 1, 'Revisi': 2, 'Selesai': 3 }
+      const ea = editOrder[a.status_edit] ?? 9
+      const eb = editOrder[b.status_edit] ?? 9
+      if (ea !== eb) return ea - eb
+      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline)
+      return 0
+    })
     return result
   }, [jobs, search, filterStatus, filterVendor, filterJenis, filterDeadline, quickFilter])
 
