@@ -6,6 +6,10 @@ import { useToast } from '../lib/ToastContext'
 import type { Job, Vendor, VendorPriceItem, JenisEdit, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
 import { JENIS_EDIT_OPTIONS, STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
 import { rupiah, formatDate, daysUntil } from '../lib/utils'
+import StatusDropdown from '../components/StatusDropdown'
+import type { StatusValue } from '../lib/statusHelpers'
+
+const ENABLE_QUICK_STATUS = true
 
 const EMPTY_FORM = {
   vendor_id: '',
@@ -258,6 +262,48 @@ export default function Jobs() {
     }
     toast({ type: 'success', title: 'Job dihapus' })
     loadData()
+  }
+
+  async function updateJobStatus(jobId: string, field: 'status_edit' | 'status_bayar' | 'status_cetak', newValue: StatusValue) {
+    const j = jobs.find((x) => x.id === jobId)
+    if (!j) return
+    if (j[field] === newValue) return
+
+    const prev = {
+      status_edit: j.status_edit,
+      status_bayar: j.status_bayar,
+      status_cetak: j.status_cetak,
+    }
+
+    setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: newValue } : x)))
+
+    const { error } = await supabase
+      .from('job')
+      .update({ [field]: newValue, updated_at: new Date().toISOString() })
+      .eq('id', jobId)
+
+    if (error) {
+      setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: prev[field] } : x)))
+      toast({ type: 'error', title: 'Gagal mengubah status', message: error.message })
+      return
+    }
+
+    const label = field === 'status_edit' ? 'Status Edit' : field === 'status_bayar' ? 'Bayar' : 'Cetak'
+    toast({
+      type: 'success',
+      title: `${label}: ${newValue}`,
+      message: j.nama_project,
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, ...prev } : x)))
+          void supabase
+            .from('job')
+            .update({ ...prev, updated_at: new Date().toISOString() })
+            .eq('id', jobId)
+        },
+      },
+    })
   }
 
   function toggleSelectAll(vendorJobs: Job[]) {
@@ -628,28 +674,55 @@ export default function Jobs() {
                               )}
                             </td>
                             <td className="py-3 px-4">
-                              <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                j.status_edit === 'Masuk' ? 'bg-blue-100 text-blue-700' :
-                                j.status_edit === 'Sedang Edit' ? 'bg-orange-100 text-orange-700' :
-                                j.status_edit === 'Revisi' ? 'bg-purple-100 text-purple-700' :
-                                'bg-emerald-100 text-emerald-700'
-                              }`}>
-                                {j.status_edit}
-                              </span>
+                              {ENABLE_QUICK_STATUS ? (
+                                <StatusDropdown
+                                  jobId={j.id}
+                                  currentValue={j.status_edit}
+                                  statusType="edit"
+                                  onUpdate={(id, val) => updateJobStatus(id, 'status_edit', val)}
+                                />
+                              ) : (
+                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  j.status_edit === 'Masuk' ? 'bg-blue-100 text-blue-700' :
+                                  j.status_edit === 'Sedang Edit' ? 'bg-orange-100 text-orange-700' :
+                                  j.status_edit === 'Revisi' ? 'bg-purple-100 text-purple-700' :
+                                  'bg-emerald-100 text-emerald-700'
+                                }`}>
+                                  {j.status_edit}
+                                </span>
+                              )}
                             </td>
                             <td className="py-3 px-4">
-                              <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                j.status_bayar === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                              }`}>
-                                {j.status_bayar}
-                              </span>
+                              {ENABLE_QUICK_STATUS ? (
+                                <StatusDropdown
+                                  jobId={j.id}
+                                  currentValue={j.status_bayar}
+                                  statusType="bayar"
+                                  onUpdate={(id, val) => updateJobStatus(id, 'status_bayar', val)}
+                                />
+                              ) : (
+                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  j.status_bayar === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                                }`}>
+                                  {j.status_bayar}
+                                </span>
+                              )}
                             </td>
                             <td className="py-3 px-4">
-                              <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                j.status_cetak === 'Sudah Cetak' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
-                              }`}>
-                                {j.status_cetak}
-                              </span>
+                              {ENABLE_QUICK_STATUS ? (
+                                <StatusDropdown
+                                  jobId={j.id}
+                                  currentValue={j.status_cetak}
+                                  statusType="cetak"
+                                  onUpdate={(id, val) => updateJobStatus(id, 'status_cetak', val)}
+                                />
+                              ) : (
+                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  j.status_cetak === 'Sudah Cetak' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                                }`}>
+                                  {j.status_cetak}
+                                </span>
+                              )}
                             </td>
                             <td className="py-3 px-4 text-center relative">
                               <button
