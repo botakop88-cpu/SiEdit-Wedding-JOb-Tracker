@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Plus, Search, ChevronDown, ChevronUp, MoreVertical, Calendar, Folder, Pencil, Trash2, X, CheckCircle2, Wallet, CreditCard } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useToast } from '../lib/ToastContext'
-import type { Job, Vendor, JenisEdit, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
+import type { Job, Vendor, VendorPriceItem, JenisEdit, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
 import { JENIS_EDIT_OPTIONS, STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
 import { rupiah, formatDate, daysUntil } from '../lib/utils'
 
@@ -26,11 +26,15 @@ const VENDOR_COLORS: Record<string, string> = {
   'IRWAN VISUAL': 'bg-slate-700',
 }
 
+interface VendorWithPrices extends Vendor {
+  price_items?: VendorPriceItem[]
+}
+
 export default function Jobs() {
   const { toast } = useToast()
   const [searchParams] = useSearchParams()
   const [jobs, setJobs] = useState<Job[]>([])
-  const [vendors, setVendors] = useState<Vendor[]>([])
+  const [vendors, setVendors] = useState<VendorWithPrices[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState(searchParams.get('q') ?? '')
   const [filterStatus, setFilterStatus] = useState('Semua Status')
@@ -67,12 +71,20 @@ export default function Jobs() {
 
   async function loadData() {
     setLoading(true)
-    const [jRes, vRes] = await Promise.all([
+    const [jRes, vRes, piRes] = await Promise.all([
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('vendor_id').order('deadline'),
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
+      supabase.from('vendor_price_item').select('*').order('urutan'),
     ])
     if (jRes.data) setJobs(jRes.data as Job[])
-    if (vRes.data) setVendors(vRes.data as Vendor[])
+    if (vRes.data) {
+      const priceByVendor = new Map<string, VendorPriceItem[]>()
+      for (const pi of (piRes.data ?? []) as VendorPriceItem[]) {
+        if (!priceByVendor.has(pi.vendor_id)) priceByVendor.set(pi.vendor_id, [])
+        priceByVendor.get(pi.vendor_id)!.push(pi)
+      }
+      setVendors((vRes.data as Vendor[]).map((v) => ({ ...v, price_items: priceByVendor.get(v.id) ?? [] })))
+    }
     setLoading(false)
   }
 
@@ -180,6 +192,61 @@ export default function Jobs() {
     })
     setMenuFor(null)
     setModal(true)
+  }
+
+  function autoFillHarga(vendorId: string, jenis: JenisEdit): number {
+    if (!vendorId) return 0
+    const v = vendors.find((x) => x.id === vendorId)
+    if (!v) return 0
+    const items = v.price_items ?? []
+    if (items.length > 0) {
+      const best = matchPriceItem(items, jenis)
+      if (best) return best.harga
+    }
+    if (jenis === 'Kolase Sudah Pilih') return v.harga_kolase_sudah_pilih
+    if (jenis === 'Kolase Belum Pilih') return v.harga_kolase_belum_pilih
+    return v.harga_edit_full
+  }
+
+  function matchPriceItem(items: VendorPriceItem[], jenis: JenisEdit): VendorPriceItem | null {
+    const q = (s: string) => s.toLowerCase()
+    const isMatch = (p: VendorPriceItem): boolean => {
+      const n = q(p.nama_produk)
+      if (jenis === 'Kolase Sudah Pilih') {
+        return (n.includes('pilih') || n.includes('sudah')) && !(n.includes('belum') || n.includes('blom'))
+      }
+      if (jenis === 'Kolase Belum Pilih') {
+        return (n.includes('belum') || n.includes('blom')) && !n.includes('sudah')
+      }
+      return !n.includes('kolase') && (n.includes('full') || n.includes('edit'))
+    }
+    return items.find(isMatch) ?? null
+  }
+
+  function classifyJenis(nama: string): JenisEdit[] {
+    const n = nama.toLowerCase()
+    if (n.includes('belum') || n.includes('blom')) return ['Kolase Belum Pilih']
+    if (n.includes('pilih') || n.includes('sudah')) return ['Kolase Sudah Pilih']
+    if (n.includes('kolase')) return ['Kolase Sudah Pilih', 'Kolase Belum Pilih']
+    if (n.includes('edit')) return ['Edit Full']
+    return []
+  }
+
+  function baseJenisEditOptions(vendorId: string): JenisEdit[] {
+    if (!vendorId) return JENIS_EDIT_OPTIONS
+    const v = vendors.find((x) => x.id === vendorId)
+    const items = v?.price_items ?? []
+    if (items.length === 0) return JENIS_EDIT_OPTIONS
+    const available = Array.from(new Set(items.flatMap((p) => classifyJenis(p.nama_produk))))
+    return available.length > 0 ? available : JENIS_EDIT_OPTIONS
+  }
+
+  function availableJenisEdit(vendorId: string): JenisEdit[] {
+    const available = baseJenisEditOptions(vendorId)
+    if (form.jenis_edit && !available.includes(form.jenis_edit)) {
+      return [...available, form.jenis_edit]
+    }
+    return available
   }
 
   async function deleteJob(j: Job) {
@@ -775,7 +842,12 @@ export default function Jobs() {
             <div className="space-y-3">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Vendor</label>
-                <select value={form.vendor_id} onChange={(e) => setForm({ ...form, vendor_id: e.target.value })} required className="input-base">
+                <select value={form.vendor_id} onChange={(e) => {
+                  const vid = e.target.value
+                  const options = baseJenisEditOptions(vid)
+                  const jenis = options.includes(form.jenis_edit) ? form.jenis_edit : options[0]
+                  setForm({ ...form, vendor_id: vid, jenis_edit: jenis, harga: autoFillHarga(vid, jenis) })
+                }} required className="input-base">
                   <option value="">Pilih vendor</option>
                   {vendors.map((v) => <option key={v.id} value={v.id}>{v.nama}</option>)}
                 </select>
@@ -787,8 +859,11 @@ export default function Jobs() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Jenis Edit</label>
-                  <select value={form.jenis_edit} onChange={(e) => setForm({ ...form, jenis_edit: e.target.value as JenisEdit })} className="input-base">
-                    {JENIS_EDIT_OPTIONS.map((j) => <option key={j}>{j}</option>)}
+                  <select value={form.jenis_edit} onChange={(e) => {
+                    const jenis = e.target.value as JenisEdit
+                    setForm((prev) => ({ ...prev, jenis_edit: jenis, harga: autoFillHarga(prev.vendor_id, jenis) }))
+                  }} className="input-base">
+                    {availableJenisEdit(form.vendor_id).map((j) => <option key={j}>{j}</option>)}
                   </select>
                 </div>
                 <div>

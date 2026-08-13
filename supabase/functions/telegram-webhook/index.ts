@@ -419,22 +419,80 @@ async function getVendors(
   return data ?? null
 }
 
+function classifyJenis(nama: string): string[] {
+  const n = nama.toLowerCase()
+  if (n.includes('belum') || n.includes('blom')) return ['Kolase Belum Pilih']
+  if (n.includes('pilih') || n.includes('sudah')) return ['Kolase Sudah Pilih']
+  if (n.includes('kolase')) return ['Kolase Sudah Pilih', 'Kolase Belum Pilih']
+  if (n.includes('edit')) return ['Edit Full']
+  return []
+}
+
+function autoFillHarga(
+  items: { nama_produk: string; harga: number }[],
+  hargaSp: number,
+  hargaBp: number,
+  hargaEf: number,
+  jenis: string,
+): number {
+  if (items.length > 0) {
+    const best = matchPriceItem(items, jenis)
+    if (best) return best.harga
+  }
+  if (jenis === 'Kolase Sudah Pilih') return hargaSp
+  if (jenis === 'Kolase Belum Pilih') return hargaBp
+  return hargaEf
+}
+
+function matchPriceItem(
+  items: { nama_produk: string; harga: number }[],
+  jenis: string,
+): { nama_produk: string; harga: number } | null {
+  const q = (s: string) => s.toLowerCase()
+  const isMatch = (p: { nama_produk: string; harga: number }): boolean => {
+    const n = q(p.nama_produk)
+    if (jenis === 'Kolase Sudah Pilih') {
+      return (n.includes('pilih') || n.includes('sudah')) && !(n.includes('belum') || n.includes('blom'))
+    }
+    if (jenis === 'Kolase Belum Pilih') {
+      return (n.includes('belum') || n.includes('blom')) && !n.includes('sudah')
+    }
+    return !n.includes('kolase') && (n.includes('full') || n.includes('edit'))
+  }
+  return items.find(isMatch) ?? null
+}
+
 async function getVendorJenisList(
   supabase: ReturnType<typeof createClient>,
   vendorId: string,
 ): Promise<{ jenis: string; harga: number }[]> {
-  const { data } = await supabase
-    .from('vendor')
-    .select('harga_kolase_sudah_pilih, harga_kolase_belum_pilih, harga_edit_full')
-    .eq('id', vendorId)
-    .maybeSingle()
+  const [vRes, piRes] = await Promise.all([
+    supabase
+      .from('vendor')
+      .select('harga_kolase_sudah_pilih, harga_kolase_belum_pilih, harga_edit_full')
+      .eq('id', vendorId)
+      .maybeSingle(),
+    supabase
+      .from('vendor_price_item')
+      .select('nama_produk, harga')
+      .eq('vendor_id', vendorId)
+      .order('urutan'),
+  ])
+  const data = vRes.data
   if (!data) return []
-  const map = [
-    { jenis: 'Kolase Sudah Pilih', harga: data.harga_kolase_sudah_pilih },
-    { jenis: 'Kolase Belum Pilih', harga: data.harga_kolase_belum_pilih },
-    { jenis: 'Edit Full', harga: data.harga_edit_full },
-  ]
-  return map.filter((m) => m.harga && m.harga > 0)
+  const items = (piRes.data ?? []) as { nama_produk: string; harga: number }[]
+  const allJenis = ['Kolase Sudah Pilih', 'Kolase Belum Pilih', 'Edit Full']
+  let jenisOptions: string[] = allJenis
+  if (items.length > 0) {
+    const available = Array.from(new Set(items.flatMap((p) => classifyJenis(p.nama_produk))))
+    jenisOptions = available.length > 0 ? allJenis.filter((j) => available.includes(j)) : allJenis
+  }
+  return jenisOptions
+    .map((jenis) => ({
+      jenis,
+      harga: autoFillHarga(items, data.harga_kolase_sudah_pilih, data.harga_kolase_belum_pilih, data.harga_edit_full, jenis),
+    }))
+    .filter((m) => m.harga && m.harga > 0)
 }
 
 async function confirmText(
