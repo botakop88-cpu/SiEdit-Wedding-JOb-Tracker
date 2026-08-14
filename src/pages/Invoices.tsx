@@ -88,6 +88,20 @@ export default function Invoices() {
       setChecked(new Set())
       return
     }
+    // Ambil job yang SUDAH di-invoice (punya invoice aktif) untuk vendor ini, agar
+    // tidak bisa di-invoice dua kali.
+    const { data: invData } = await supabase
+      .from('invoice')
+      .select('items_json')
+      .eq('vendor_id', vendorId)
+      .is('deleted_at', null)
+    const alreadyInvoiced = new Set<string>()
+    for (const inv of (invData ?? []) as Pick<Invoice, 'items_json'>[]) {
+      for (const it of parseItems(inv.items_json)) {
+        if (it.job_id) alreadyInvoiced.add(it.job_id)
+      }
+    }
+
     const { data } = await supabase
       .from('job')
       .select('*')
@@ -96,7 +110,7 @@ export default function Invoices() {
       .is('deleted_at', null)
       .order('created_at')
 
-    const jobs = (data ?? []) as Job[]
+    const jobs = ((data ?? []) as Job[]).filter((j) => !alreadyInvoiced.has(j.id))
     setUnpaidJobs(jobs)
     setChecked(new Set(jobs.map((j) => j.id)))
   }
@@ -113,8 +127,36 @@ export default function Invoices() {
   const selectedJobs = unpaidJobs.filter((j) => checked.has(j.id))
   const total = selectedJobs.reduce((s, j) => s + j.harga, 0)
 
+  // Parse items_json dengan aman — data lama/korup tidak boleh mematikan halaman.
+  function parseItems(itemsJson: string | null): InvoiceItem[] {
+    if (!itemsJson) return []
+    try {
+      const parsed = JSON.parse(itemsJson)
+      return Array.isArray(parsed) ? (parsed as InvoiceItem[]) : []
+    } catch {
+      return []
+    }
+  }
+
   const totalLunas = summary.totalLunas
   const totalPiutang = summary.totalPiutang
+
+  // Nomor invoice dihitung dari nomor terbesar yang SUDAH TERSIMPAN (bukan COUNT),
+  // sehingga tidak bentrok setelah ada invoice di-soft-delete. Nomornya ditulis ke
+  // kolom `nomor` (unique index idx_invoice_nomor_user) supaya anti-duplikat.
+  async function nextInvoiceNumber(): Promise<string> {
+    const { data } = await supabase
+      .from('invoice')
+      .select('nomor')
+      .is('deleted_at', null)
+    const rows = (data ?? []) as Pick<Invoice, 'nomor'>[]
+    let max = 0
+    for (const r of rows) {
+      const m = /^INV-(\d+)/.exec(r.nomor ?? '')
+      if (m) max = Math.max(max, parseInt(m[1], 10))
+    }
+    return `INV-${String(max + 1).padStart(4, '0')}`
+  }
 
   async function generateInvoice() {
     if (selectedJobs.length === 0) return toast({ type: 'error', title: 'Pilih minimal 1 job.' })
@@ -128,26 +170,32 @@ export default function Invoices() {
       jenis: j.jenis_edit,
     }))
 
-    // Invoice number from count (invoice yang sudah dihapus/soft-delete tidak dihitung)
-    const { count } = await supabase
-      .from('invoice')
-      .select('*', { count: 'exact', head: true })
-      .is('deleted_at', null)
+    // Coba insert dengan nomor baru; kalau tab lain keburu mengambil nomor yang sama
+    // (unique violation 23505), ulangi dengan nomor berikutnya.
+    let invNumber = ''
+    let invErr: { message: string; code?: string } | null = null
+    for (let attempt = 0; attempt < 5; attempt++) {
+      invNumber = await nextInvoiceNumber()
+      const { error } = await supabase.from('invoice').insert({
+        user_id: user!.id,
+        vendor_id: selectedVendor,
+        vendor_nama: vendor?.nama ?? '',
+        tanggal: todayStr(),
+        items_json: JSON.stringify(items),
+        total,
+        status_bayar: 'Belum Bayar',
+        nomor: invNumber,
+      })
+      if (!error) {
+        invErr = null
+        break
+      }
+      invErr = error as { message: string; code?: string }
+      if (invErr.code !== '23505') break
+    }
 
-    const invNumber = `INV-${String((count ?? 0) + 1).padStart(4, '0')}`
-
-    const { error } = await supabase.from('invoice').insert({
-      user_id: user!.id,
-      vendor_id: selectedVendor,
-      vendor_nama: vendor?.nama ?? '',
-      tanggal: todayStr(),
-      items_json: JSON.stringify(items),
-      total,
-      status_bayar: 'Belum Bayar',
-    })
-
-    if (error) {
-      toast({ type: 'error', title: 'Gagal membuat invoice', message: error.message })
+    if (invErr) {
+      toast({ type: 'error', title: 'Gagal membuat invoice', message: invErr.message })
       setGenerating(false)
       return
     }
@@ -214,7 +262,7 @@ export default function Invoices() {
 
   async function toggleStatus(inv: Invoice) {
     const newStatus = inv.status_bayar === 'Lunas' ? 'Belum Bayar' : 'Lunas'
-    const items: InvoiceItem[] = JSON.parse(inv.items_json)
+    const items: InvoiceItem[] = parseItems(inv.items_json)
     const jobIds = items.map((i) => i.job_id)
 
     const { error: invErr } = await supabase
@@ -261,14 +309,21 @@ export default function Invoices() {
   }
 
   async function reprint(inv: Invoice) {
-    const items: InvoiceItem[] = JSON.parse(inv.items_json)
-    // invoice number from DB counter (hanya invoice aktif yang dihitung)
-    const { count } = await supabase
-      .from('invoice')
-      .select('*', { count: 'exact', head: true })
-      .is('deleted_at', null)
-      .lte('created_at', inv.created_at)
-    const number = `INV-${String((count ?? 1)).padStart(4, '0')}`
+    const items: InvoiceItem[] = parseItems(inv.items_json)
+    // Nomor yang dicetak ulang = nomor asli yang tersimpan (konsisten dengan yang dulu
+    // dilihat user saat invoice dibuat). Fallback ke hitungan lama hanya untuk invoice
+    // dari sebelum kolom `nomor` terisi.
+    let number: string
+    if (inv.nomor) {
+      number = inv.nomor
+    } else {
+      const { count } = await supabase
+        .from('invoice')
+        .select('*', { count: 'exact', head: true })
+        .is('deleted_at', null)
+        .lte('created_at', inv.created_at)
+      number = `INV-${String((count ?? 1)).padStart(4, '0')}`
+    }
     printInvoice(number, inv.vendor_nama, inv.tanggal, items, inv.total)
   }
 
@@ -382,7 +437,7 @@ export default function Invoices() {
           ) : (
             <>
               {invoices.map((inv) => {
-                const items: InvoiceItem[] = JSON.parse(inv.items_json)
+                const items: InvoiceItem[] = parseItems(inv.items_json)
                 return (
                   <div key={inv.id} className="card card-hover p-4 flex flex-col sm:flex-row sm:items-center gap-3">
                     <div className="flex items-center gap-3 flex-1 min-w-0">

@@ -475,9 +475,9 @@ export default function Reports() {
   }, [jobsCreated, monthList])
 
   const trendSeries = [
-    { label: 'Selesai', color: '#10b981', data: monthList.map((m) => jobsPaid.filter((j) => (j.tanggal_lunas ?? '').startsWith(m.label.replace(' ', '-')) && j.status_edit === 'Selesai').length) },
-    { label: 'Sedang Edit', color: '#f97316', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Sedang Edit').length) },
-    { label: 'Batal', color: '#e11d48', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Batal').length) },
+    { label: 'Selesai', color: '#10b981', data: monthList.map((m) => jobsPaid.filter((j) => (j.tanggal_lunas ?? '').startsWith(`${m.year}-${String(m.month + 1).padStart(2, '0')}`) && j.status_edit === 'Selesai').length) },
+    { label: 'Sedang Edit', color: '#f97316', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === `${m.year}-${String(m.month + 1).padStart(2, '0')}` && j.status_edit === 'Sedang Edit').length) },
+    { label: 'Batal', color: '#e11d48', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === `${m.year}-${String(m.month + 1).padStart(2, '0')}` && j.status_edit === 'Batal').length) },
   ]
 
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set())

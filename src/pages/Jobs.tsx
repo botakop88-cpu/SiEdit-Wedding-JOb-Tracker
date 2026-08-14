@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useToast } from '../lib/ToastContext'
 import type { Job, Vendor, VendorPriceItem, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
 import { STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
-import { rupiah, formatDate, daysUntil } from '../lib/utils'
+import { rupiah, formatDate, daysUntil, todayStr } from '../lib/utils'
 import StatusDropdown from '../components/StatusDropdown'
 import type { StatusValue } from '../lib/statusHelpers'
 
@@ -58,7 +58,7 @@ export default function Jobs() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(100)
   const searchRef = useRef<HTMLInputElement>(null)
-  const prevStatusRef = useRef<Record<string, { status_edit: StatusEdit; status_bayar: StatusBayar; status_cetak: StatusCetak }>>({})
+  const prevStatusRef = useRef<Record<string, { status_edit: StatusEdit; status_bayar: StatusBayar; status_cetak: StatusCetak; tanggal_lunas: string | null }>>({})
 
   useEffect(() => { loadData() }, [])
 
@@ -96,7 +96,7 @@ export default function Jobs() {
     let result = jobs
     if (search) {
       const q = search.toLowerCase()
-      result = result.filter((j) => j.nama_project.toLowerCase().includes(q) || j.vendor?.nama.toLowerCase().includes(q))
+      result = result.filter((j) => j.nama_project.toLowerCase().includes(q) || (j.vendor?.nama ?? '').toLowerCase().includes(q))
     }
     if (filterStatus !== 'Semua Status') result = result.filter((j) => j.status_edit === filterStatus)
     if (filterVendor !== 'Semua Vendor') result = result.filter((j) => j.vendor?.nama === filterVendor)
@@ -245,17 +245,30 @@ export default function Jobs() {
       status_edit: j.status_edit,
       status_bayar: j.status_bayar,
       status_cetak: j.status_cetak,
+      tanggal_lunas: j.tanggal_lunas,
     }
 
-    setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: newValue } : x)))
+    const patch: Record<string, unknown> = { [field]: newValue, updated_at: new Date().toISOString() }
+    // Jaga konsistensi tanggal_lunas dengan Invoices: Lunas -> isi tanggal lunas hari ini,
+    // bukan Lunas -> kosongkan. Kalau tidak, job yang ditandai Lunas lewat dropdown cepat
+    // hilang dari pendapatan Dashboard/Reports (yang hitung via tanggal_lunas).
+    const nextTanggalLunas: string | null =
+      field === 'status_bayar' ? (newValue === 'Lunas' ? todayStr() : null) : j.tanggal_lunas
+    if (field === 'status_bayar') {
+      patch.tanggal_lunas = nextTanggalLunas
+    }
+
+    setJobs((list) =>
+      list.map((x) => (x.id === jobId ? { ...x, tanggal_lunas: nextTanggalLunas, [field]: newValue } : x)),
+    )
 
     const { error } = await supabase
       .from('job')
-      .update({ [field]: newValue, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('id', jobId)
 
     if (error) {
-      setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: prev[field] } : x)))
+      setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: prev[field], tanggal_lunas: prev.tanggal_lunas } : x)))
       toast({ type: 'error', title: 'Gagal mengubah status', message: error.message })
       return
     }
@@ -293,14 +306,15 @@ export default function Jobs() {
   async function bulkMarkDone() {
     if (selected.size === 0) return
     const ids = Array.from(selected)
-    const allDone = jobs.filter((j) => ids.includes(j.id)).every((j) => j.status_edit === 'Selesai')
+    // Definisi "beres total" harus konsisten dengan urutan job (sort) dan tampilan:
+    // Selesai && Sudah Cetak. Ini mencegah job yang baru "Selesai" tapi belum dicetak
+    // (alur kerja sah) ikut ter-undo secara tak terduga saat tombol Job Beres ditekan.
+    const targetJobs = jobs.filter((j) => ids.includes(j.id))
+    const allDone = targetJobs.length > 0 && targetJobs.every((j) => j.status_edit === 'Selesai' && j.status_cetak === 'Sudah Cetak')
 
     if (allDone) {
-      const targetJobs = jobs.filter((j) => ids.includes(j.id))
-      // Hanya job yang riwayat status sebelumnya tercatat (ditandai Selesai lewat tombol ini
-      // pada sesi berjalan) yang boleh di-undo. Job lain (misal statusnya "Selesai" dari awal,
-      // atau riwayatnya hilang karena halaman di-reload) dilewati agar tidak salah direset
-      // ke status default.
+      // Klik kedua = undo, tapi hanya untuk job yang riwayat sebelumnya tercatat pada
+      // sesi ini (mencegah job yang memang beres sejak awal direset ke status default).
       const restorable = targetJobs.filter((j) => prevStatusRef.current[j.id])
       const skipped = targetJobs.length - restorable.length
 
@@ -311,7 +325,8 @@ export default function Jobs() {
             status_edit: prev.status_edit,
             status_bayar: prev.status_bayar,
             status_cetak: prev.status_cetak,
-            tanggal_lunas: prev.status_bayar === 'Lunas' ? new Date().toISOString().slice(0, 10) : null,
+            // Kembalikan tanggal lunas ASLI dari riwayat, bukan di-reset ke hari ini.
+            tanggal_lunas: prev.tanggal_lunas ?? null,
           })
           .eq('id', j.id)
         if (error) {
@@ -332,18 +347,19 @@ export default function Jobs() {
         })
       }
     } else {
-      for (const j of jobs.filter((j) => ids.includes(j.id))) {
+      for (const j of targetJobs) {
         prevStatusRef.current[j.id] = {
           status_edit: j.status_edit,
           status_bayar: j.status_bayar,
           status_cetak: j.status_cetak,
+          tanggal_lunas: j.tanggal_lunas,
         }
         const { error } = await supabase.from('job')
           .update({
             status_edit: 'Selesai',
             status_bayar: 'Lunas',
             status_cetak: 'Sudah Cetak',
-            tanggal_lunas: new Date().toISOString().slice(0, 10),
+            tanggal_lunas: todayStr(),
           })
           .eq('id', j.id)
         if (error) {
@@ -362,7 +378,7 @@ export default function Jobs() {
     if (selected.size === 0) return
     const ids = Array.from(selected)
     const { error } = await supabase.from('job')
-      .update({ status_bayar: 'Lunas', tanggal_lunas: new Date().toISOString().slice(0, 10) })
+      .update({ status_bayar: 'Lunas', tanggal_lunas: todayStr() })
       .in('id', ids)
     if (error) {
       toast({ type: 'error', title: 'Gagal memperbarui', message: error.message })
@@ -422,7 +438,13 @@ export default function Jobs() {
       return
     }
     setSaving(true)
-    const payload = { ...form, user_id: (await supabase.auth.getUser()).data.user?.id }
+    const payload: Record<string, unknown> = { ...form, user_id: (await supabase.auth.getUser()).data.user?.id }
+    // Jaga konsistensi tanggal_lunas saat status_bayar diubah lewat form edit:
+    // Lunas -> isi tanggal lunas, bukan Lunas -> kosongkan. (tidak menyentuh saat tambah
+    // job baru yang selalu Belum Bayar).
+    if (editing && form.status_bayar !== editing.status_bayar) {
+      payload.tanggal_lunas = form.status_bayar === 'Lunas' ? todayStr() : null
+    }
     const { error } = editing
       ? await supabase.from('job').update(payload).eq('id', editing.id)
       : await supabase.from('job').insert([payload])

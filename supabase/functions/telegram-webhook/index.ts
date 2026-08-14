@@ -828,6 +828,10 @@ function daysUntil(dateStr: string): number {
   const WIB = 7 * 60 * 60 * 1000
   const now = new Date(Date.now() + WIB)
   now.setHours(0, 0, 0, 0)
-  const target = new Date(dateStr + 'T00:00:00')
+  // dateStr+T00:00:00 di-parse sebagai UTC (= 07:00 WIB). Tambah offset WIB lalu
+  // bulatkan ke tengah malam WIB supaya sebanding dengan `now`, agar selisih hari
+  // tidak selalu kelebihan 7 jam (off-by-one).
+  const target = new Date(new Date(dateStr + 'T00:00:00').getTime() + WIB)
+  target.setHours(0, 0, 0, 0)
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 }

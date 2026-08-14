@@ -70,14 +70,24 @@ export default function Settings() {
   async function saveSettings(patch: Partial<UserSettings>) {
     if (!user) return { error: { message: 'Tidak terautentikasi' } as { message: string } }
     if (settings?.id) {
-      return supabase
+      const res = await supabase
         .from('user_settings')
         .update({ ...patch, updated_at: new Date().toISOString() })
         .eq('id', settings.id)
+      return res
     }
-    return supabase
+    // Belum ada baris user_settings. Insert, lalu simpan id hasil ke state supaya
+    // pemanggilan berikutnya memakai update (bukan insert lagi) — mencegah baris ganda
+    // yang membuat .maybeSingle() gagal sehingga pengaturan tidak pernah termuat.
+    const res = await supabase
       .from('user_settings')
       .insert({ user_id: user.id, ...patch })
+      .select('id')
+      .single()
+    if (!res.error && res.data) {
+      setSettings((s) => ({ ...(s as UserSettings), id: (res.data as { id: string }).id }))
+    }
+    return res
   }
 
   async function handleSaveProfile() {

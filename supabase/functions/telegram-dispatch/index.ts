@@ -44,7 +44,11 @@ function currentWIBTime(): string {
 function daysUntil(dateStr: string): number {
   const now = nowWIB()
   now.setHours(0, 0, 0, 0)
-  const target = new Date(dateStr + 'T00:00:00')
+  // dateStr+T00:00:00 di-parse sebagai UTC (= 07:00 WIB). Tambah offset WIB lalu
+  // bulatkan ke tengah malam supaya sebanding dengan `now`, agar selisih hari
+  // tidak selalu kelebihan 7 jam (off-by-one).
+  const target = new Date(new Date(dateStr + 'T00:00:00').getTime() + WIB_OFFSET_MS)
+  target.setHours(0, 0, 0, 0)
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 }
 
