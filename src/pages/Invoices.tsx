@@ -18,6 +18,8 @@ export default function Invoices() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  // Ringkasan dihitung dari SEMUA invoice aktif (bukan cuma yang sudah dimuat di halaman riwayat)
+  const [summary, setSummary] = useState({ totalCount: 0, totalLunas: 0, totalPiutang: 0 })
   // Pagination for riwayat
   const [riwayatPage, setRiwayatPage] = useState(0)
   const [riwayatHasMore, setRiwayatHasMore] = useState(true)
@@ -26,6 +28,21 @@ export default function Invoices() {
 
   useEffect(() => { loadInitial() }, [])
 
+  async function loadSummary() {
+    // Ambil kolom ringan saja (bukan items_json) untuk semua invoice aktif,
+    // supaya kartu ringkasan akurat walau riwayat sudah lebih dari 1 halaman.
+    const { data } = await supabase
+      .from('invoice')
+      .select('status_bayar, total')
+      .is('deleted_at', null)
+    const rows = (data ?? []) as Pick<Invoice, 'status_bayar' | 'total'>[]
+    setSummary({
+      totalCount: rows.length,
+      totalLunas: rows.filter((r) => r.status_bayar === 'Lunas').reduce((s, r) => s + r.total, 0),
+      totalPiutang: rows.filter((r) => r.status_bayar !== 'Lunas').reduce((s, r) => s + r.total, 0),
+    })
+  }
+
   async function loadInitial() {
     setLoading(true)
     const [vRes, iRes] = await Promise.all([
@@ -33,6 +50,7 @@ export default function Invoices() {
       // First page of riwayat only
       supabase.from('invoice').select('*').is('deleted_at', null).order('created_at', { ascending: false })
         .range(0, RIWAYAT_PAGE_SIZE - 1),
+      loadSummary(),
     ])
     if (vRes.data) setVendors(vRes.data as Vendor[])
     if (iRes.data) {
@@ -95,8 +113,8 @@ export default function Invoices() {
   const selectedJobs = unpaidJobs.filter((j) => checked.has(j.id))
   const total = selectedJobs.reduce((s, j) => s + j.harga, 0)
 
-  const totalLunas = invoices.filter((i) => i.status_bayar === 'Lunas').reduce((s, i) => s + i.total, 0)
-  const totalPiutang = invoices.filter((i) => i.status_bayar !== 'Lunas').reduce((s, i) => s + i.total, 0)
+  const totalLunas = summary.totalLunas
+  const totalPiutang = summary.totalPiutang
 
   async function generateInvoice() {
     if (selectedJobs.length === 0) return toast({ type: 'error', title: 'Pilih minimal 1 job.' })
@@ -110,10 +128,11 @@ export default function Invoices() {
       jenis: j.jenis_edit,
     }))
 
-    // Invoice number from count
+    // Invoice number from count (invoice yang sudah dihapus/soft-delete tidak dihitung)
     const { count } = await supabase
       .from('invoice')
       .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null)
 
     const invNumber = `INV-${String((count ?? 0) + 1).padStart(4, '0')}`
 
@@ -243,10 +262,11 @@ export default function Invoices() {
 
   async function reprint(inv: Invoice) {
     const items: InvoiceItem[] = JSON.parse(inv.items_json)
-    // invoice number from DB counter
+    // invoice number from DB counter (hanya invoice aktif yang dihitung)
     const { count } = await supabase
       .from('invoice')
       .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null)
       .lte('created_at', inv.created_at)
     const number = `INV-${String((count ?? 1)).padStart(4, '0')}`
     printInvoice(number, inv.vendor_nama, inv.tanggal, items, inv.total)
@@ -264,7 +284,7 @@ export default function Invoices() {
     <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-5">
       {/* Summary strip */}
       <div className="grid grid-cols-3 gap-3 md:gap-4">
-        <SummaryCard icon={ReceiptText} label="Total Invoice" value={String(invoices.length)} gradient="from-sky-500 to-indigo-500" />
+        <SummaryCard icon={ReceiptText} label="Total Invoice" value={String(summary.totalCount)} gradient="from-sky-500 to-indigo-500" />
         <SummaryCard icon={Clock3} label="Piutang" value={rupiah(totalPiutang)} gradient="from-amber-500 to-orange-500" small />
         <SummaryCard icon={CheckCircle2} label="Lunas" value={rupiah(totalLunas)} gradient="from-emerald-500 to-teal-500" small />
       </div>
