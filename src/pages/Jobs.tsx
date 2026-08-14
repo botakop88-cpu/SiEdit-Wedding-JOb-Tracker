@@ -115,14 +115,22 @@ export default function Jobs() {
     else if (quickFilter === 'Belum Cetak') result = result.filter((j) => j.status_cetak === 'Belum Cetak')
 
     result = [...result].sort((a, b) => {
-      if (a.status_bayar !== b.status_bayar) {
-        return a.status_bayar === 'Belum Bayar' ? -1 : 1
-      }
+      const doneA = a.status_edit === 'Selesai' && a.status_bayar === 'Lunas' && a.status_cetak === 'Sudah Cetak'
+      const doneB = b.status_edit === 'Selesai' && b.status_bayar === 'Lunas' && b.status_cetak === 'Sudah Cetak'
+      if (doneA !== doneB) return doneA ? 1 : -1
+
       const editOrder: Record<string, number> = { 'Masuk': 0, 'Sedang Edit': 1, 'Revisi': 2, 'Selesai': 3 }
       const ea = editOrder[a.status_edit] ?? 9
       const eb = editOrder[b.status_edit] ?? 9
       if (ea !== eb) return ea - eb
+
+      if (a.status_bayar !== b.status_bayar) {
+        return a.status_bayar === 'Belum Bayar' ? -1 : 1
+      }
+
       if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline)
+      if (a.deadline) return -1
+      if (b.deadline) return 1
       return 0
     })
     return result
