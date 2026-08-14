@@ -18,7 +18,7 @@ export interface Job {
   user_id: string
   vendor_id: string | null
   nama_project: string
-  jenis_edit: JenisEdit
+  jenis_edit: string
   harga: number
   deadline: string | null
   status_edit: StatusEdit
@@ -78,6 +78,9 @@ export interface UserSettings {
 
 // ─── Enum types ──────────────────────────────────────────────────
 
+// Catatan: 3 nilai ini adalah sisa dari versi lama sebelum ada "Daftar Produk / Harga"
+// per-vendor yang bebas diisi. Form Tambah/Edit Job SUDAH TIDAK memakai daftar ini —
+// Jenis Edit sekarang selalu mengikuti persis apa yang diisi di menu Vendor.
 export type JenisEdit = 'Kolase Sudah Pilih' | 'Kolase Belum Pilih' | 'Edit Full'
 export type StatusEdit = 'Masuk' | 'Sedang Edit' | 'Revisi' | 'Selesai'
 export type StatusBayar = 'Belum Bayar' | 'Lunas'

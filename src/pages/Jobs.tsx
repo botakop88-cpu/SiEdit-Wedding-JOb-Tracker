@@ -3,8 +3,8 @@ import { useSearchParams } from 'react-router-dom'
 import { Plus, Search, ChevronDown, ChevronUp, MoreVertical, Calendar, Folder, Pencil, Trash2, X, CheckCircle2, Wallet, CreditCard } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useToast } from '../lib/ToastContext'
-import type { Job, Vendor, VendorPriceItem, JenisEdit, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
-import { JENIS_EDIT_OPTIONS, STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
+import type { Job, Vendor, VendorPriceItem, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
+import { STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
 import { rupiah, formatDate, daysUntil } from '../lib/utils'
 import StatusDropdown from '../components/StatusDropdown'
 import type { StatusValue } from '../lib/statusHelpers'
@@ -14,7 +14,7 @@ const ENABLE_QUICK_STATUS = true
 const EMPTY_FORM = {
   vendor_id: '',
   nama_project: '',
-  jenis_edit: 'Kolase Sudah Pilih' as JenisEdit,
+  jenis_edit: '',
   harga: 0,
   deadline: '',
   status_edit: 'Masuk' as StatusEdit,
@@ -128,6 +128,10 @@ export default function Jobs() {
     return result
   }, [jobs, search, filterStatus, filterVendor, filterJenis, filterDeadline, quickFilter])
 
+  const jenisFilterOptions = useMemo(() => {
+    return Array.from(new Set(jobs.map((j) => j.jenis_edit).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  }, [jobs])
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
 
   useEffect(() => {
@@ -198,59 +202,19 @@ export default function Jobs() {
     setModal(true)
   }
 
-  function autoFillHarga(vendorId: string, jenis: JenisEdit): number {
-    if (!vendorId) return 0
+  // Daftar produk vendor (persis seperti diisi di menu Vendor > Daftar Produk / Harga),
+  // sudah urut sesuai `urutan`. Kosong kalau vendor belum punya produk sama sekali.
+  function vendorProducts(vendorId: string): VendorPriceItem[] {
+    if (!vendorId) return []
     const v = vendors.find((x) => x.id === vendorId)
-    if (!v) return 0
-    const items = v.price_items ?? []
-    if (items.length > 0) {
-      const best = matchPriceItem(items, jenis)
-      if (best) return best.harga
-    }
-    if (jenis === 'Kolase Sudah Pilih') return v.harga_kolase_sudah_pilih
-    if (jenis === 'Kolase Belum Pilih') return v.harga_kolase_belum_pilih
-    return v.harga_edit_full
+    return v?.price_items ?? []
   }
 
-  function matchPriceItem(items: VendorPriceItem[], jenis: JenisEdit): VendorPriceItem | null {
-    const q = (s: string) => s.toLowerCase()
-    const isMatch = (p: VendorPriceItem): boolean => {
-      const n = q(p.nama_produk)
-      if (jenis === 'Kolase Sudah Pilih') {
-        return (n.includes('pilih') || n.includes('sudah')) && !(n.includes('belum') || n.includes('blom'))
-      }
-      if (jenis === 'Kolase Belum Pilih') {
-        return (n.includes('belum') || n.includes('blom')) && !n.includes('sudah')
-      }
-      return !n.includes('kolase') && (n.includes('full') || n.includes('edit'))
-    }
-    return items.find(isMatch) ?? null
-  }
-
-  function classifyJenis(nama: string): JenisEdit[] {
-    const n = nama.toLowerCase()
-    if (n.includes('belum') || n.includes('blom')) return ['Kolase Belum Pilih']
-    if (n.includes('pilih') || n.includes('sudah')) return ['Kolase Sudah Pilih']
-    if (n.includes('kolase')) return ['Kolase Sudah Pilih', 'Kolase Belum Pilih']
-    if (n.includes('edit')) return ['Edit Full']
-    return []
-  }
-
-  function baseJenisEditOptions(vendorId: string): JenisEdit[] {
-    if (!vendorId) return JENIS_EDIT_OPTIONS
-    const v = vendors.find((x) => x.id === vendorId)
-    const items = v?.price_items ?? []
-    if (items.length === 0) return JENIS_EDIT_OPTIONS
-    const available = Array.from(new Set(items.flatMap((p) => classifyJenis(p.nama_produk))))
-    return available.length > 0 ? available : JENIS_EDIT_OPTIONS
-  }
-
-  function availableJenisEdit(vendorId: string): JenisEdit[] {
-    const available = baseJenisEditOptions(vendorId)
-    if (form.jenis_edit && !available.includes(form.jenis_edit)) {
-      return [...available, form.jenis_edit]
-    }
-    return available
+  // Cari harga produk berdasarkan nama PERSIS (bukan tebak kata kunci), supaya harga yang
+  // terisi otomatis selalu sesuai dengan yang diisi vendor, tidak pernah ketuker.
+  function hargaForProduct(vendorId: string, namaProduk: string): number {
+    const items = vendorProducts(vendorId)
+    return items.find((p) => p.nama_produk === namaProduk)?.harga ?? 0
   }
 
   async function deleteJob(j: Job) {
@@ -324,14 +288,22 @@ export default function Jobs() {
     const allDone = jobs.filter((j) => ids.includes(j.id)).every((j) => j.status_edit === 'Selesai')
 
     if (allDone) {
-      for (const j of jobs.filter((j) => ids.includes(j.id))) {
+      const targetJobs = jobs.filter((j) => ids.includes(j.id))
+      // Hanya job yang riwayat status sebelumnya tercatat (ditandai Selesai lewat tombol ini
+      // pada sesi berjalan) yang boleh di-undo. Job lain (misal statusnya "Selesai" dari awal,
+      // atau riwayatnya hilang karena halaman di-reload) dilewati agar tidak salah direset
+      // ke status default.
+      const restorable = targetJobs.filter((j) => prevStatusRef.current[j.id])
+      const skipped = targetJobs.length - restorable.length
+
+      for (const j of restorable) {
         const prev = prevStatusRef.current[j.id]
         const { error } = await supabase.from('job')
           .update({
-            status_edit: prev?.status_edit ?? 'Masuk',
-            status_bayar: prev?.status_bayar ?? 'Belum Bayar',
-            status_cetak: prev?.status_cetak ?? 'Belum Cetak',
-            tanggal_lunas: null,
+            status_edit: prev.status_edit,
+            status_bayar: prev.status_bayar,
+            status_cetak: prev.status_cetak,
+            tanggal_lunas: prev.status_bayar === 'Lunas' ? new Date().toISOString().slice(0, 10) : null,
           })
           .eq('id', j.id)
         if (error) {
@@ -340,7 +312,17 @@ export default function Jobs() {
         }
         delete prevStatusRef.current[j.id]
       }
-      toast({ type: 'success', title: `${ids.length} job dikembalikan ke status sebelumnya` })
+
+      if (restorable.length > 0) {
+        toast({ type: 'success', title: `${restorable.length} job dikembalikan ke status sebelumnya` })
+      }
+      if (skipped > 0) {
+        toast({
+          type: 'info',
+          title: `${skipped} job dilewati`,
+          message: 'Riwayat status sebelumnya tidak ditemukan (misal setelah reload halaman), jadi tidak diubah.',
+        })
+      }
     } else {
       for (const j of jobs.filter((j) => ids.includes(j.id))) {
         prevStatusRef.current[j.id] = {
@@ -488,7 +470,7 @@ export default function Jobs() {
           </select>
           <select value={filterJenis} onChange={(e) => { setFilterJenis(e.target.value); setPage(1) }} className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
             <option>Semua Jenis</option>
-            {JENIS_EDIT_OPTIONS.map((j) => <option key={j}>{j}</option>)}
+            {jenisFilterOptions.map((j) => <option key={j}>{j}</option>)}
           </select>
           <div className="relative">
             <button
@@ -917,9 +899,14 @@ export default function Jobs() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Vendor</label>
                 <select value={form.vendor_id} onChange={(e) => {
                   const vid = e.target.value
-                  const options = baseJenisEditOptions(vid)
-                  const jenis = options.includes(form.jenis_edit) ? form.jenis_edit : options[0]
-                  setForm({ ...form, vendor_id: vid, jenis_edit: jenis, harga: autoFillHarga(vid, jenis) })
+                  const products = vendorProducts(vid)
+                  const first = products[0]
+                  setForm({
+                    ...form,
+                    vendor_id: vid,
+                    jenis_edit: first ? first.nama_produk : '',
+                    harga: first ? first.harga : 0,
+                  })
                 }} required className="input-base">
                   <option value="">Pilih vendor</option>
                   {vendors.map((v) => <option key={v.id} value={v.id}>{v.nama}</option>)}
@@ -932,12 +919,43 @@ export default function Jobs() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Jenis Edit</label>
-                  <select value={form.jenis_edit} onChange={(e) => {
-                    const jenis = e.target.value as JenisEdit
-                    setForm((prev) => ({ ...prev, jenis_edit: jenis, harga: autoFillHarga(prev.vendor_id, jenis) }))
-                  }} className="input-base">
-                    {availableJenisEdit(form.vendor_id).map((j) => <option key={j}>{j}</option>)}
-                  </select>
+                  {(() => {
+                    const products = vendorProducts(form.vendor_id)
+                    if (!form.vendor_id) {
+                      return (
+                        <select disabled className="input-base opacity-60">
+                          <option>Pilih vendor dulu</option>
+                        </select>
+                      )
+                    }
+                    if (products.length === 0) {
+                      return (
+                        <>
+                          <select disabled className="input-base opacity-60 !text-amber-700">
+                            <option>Vendor ini belum punya daftar produk</option>
+                          </select>
+                          <p className="text-xs text-amber-600 mt-1">
+                            Tambahkan dulu "Daftar Produk / Harga" di menu Vendor supaya harga terisi otomatis.
+                          </p>
+                        </>
+                      )
+                    }
+                    // Jaga-jaga: job lama yang jenis_edit-nya sudah tidak ada lagi di daftar
+                    // produk vendor saat ini (misal namanya diubah/dihapus) tetap ditampilkan
+                    // apa adanya, supaya tidak diam-diam diganti ke produk lain.
+                    const names = products.map((p) => p.nama_produk)
+                    const options = form.jenis_edit && !names.includes(form.jenis_edit)
+                      ? [form.jenis_edit, ...names]
+                      : names
+                    return (
+                      <select value={form.jenis_edit} onChange={(e) => {
+                        const jenis = e.target.value
+                        setForm((prev) => ({ ...prev, jenis_edit: jenis, harga: hargaForProduct(prev.vendor_id, jenis) }))
+                      }} className="input-base">
+                        {options.map((j) => <option key={j}>{j}</option>)}
+                      </select>
+                    )
+                  })()}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Harga</label>

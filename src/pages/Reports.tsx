@@ -367,8 +367,9 @@ export default function Reports() {
         .from('job')
         .select('nama_project, harga, tanggal_lunas, deadline, created_at, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
         .is('deleted_at', null)
-        .gte('created_at', from)
-        .lte('created_at', to + 'T23:59:59')
+        // Ambil job yang DIBUAT dalam periode (untuk hitungan job masuk) ATAU
+        // yang DILUNASI (tanggal_lunas) dalam periode (untuk angka uang/pendapatan).
+        .or(`and(created_at.gte.${from},created_at.lte.${to}T23:59:59),and(tanggal_lunas.gte.${from},tanggal_lunas.lte.${to})`)
         .order('created_at', { ascending: false }),
       supabase.from('vendor').select('id, nama').is('deleted_at', null),
     ])
@@ -384,13 +385,28 @@ export default function Reports() {
 
   /* ─── Computed ───────────────────────────────────── */
 
-  const totalJobs = jobs.length
-  const totalPendapatan = jobs.filter((j) => j.status_bayar === 'Lunas').reduce((s, j) => s + j.harga, 0)
-  const totalOutstanding = jobs.filter((j) => j.status_bayar !== 'Lunas').reduce((s, j) => s + j.harga, 0)
-  const booking = jobs.filter((j) => j.status_edit === 'Masuk').length
-  const sedangEdit = jobs.filter((j) => j.status_edit === 'Sedang Edit').length
-  const revisiCount = jobs.filter((j) => j.status_edit === 'Revisi').length
-  const selesaiCount = jobs.filter((j) => j.status_edit === 'Selesai').length
+  const fromStr = dateStr(fromYear, fromMonth) + '-01'
+  const toStr = monthEnd(toYear, toMonth)
+
+  // Dua kumpulan dipisah sesuai basis tanggalnya:
+  // - jobsCreated: job yang MASUK (dibuat) dalam periode -> untuk hitungan job
+  // - jobsPaid:    job yang uangnya MASUK (dilunasi) dalam periode -> untuk angka pendapatan
+  const jobsCreated = jobs.filter((j) => {
+    const c = (j.created_at ?? '').slice(0, 10)
+    return c >= fromStr && c <= toStr
+  })
+  const jobsPaid = jobs.filter((j) => {
+    if (j.status_bayar !== 'Lunas' || !j.tanggal_lunas) return false
+    return j.tanggal_lunas >= fromStr && j.tanggal_lunas <= toStr
+  })
+
+  const totalJobs = jobsCreated.length
+  const totalPendapatan = jobsPaid.reduce((s, j) => s + j.harga, 0)
+  const totalOutstanding = jobsCreated.filter((j) => j.status_bayar !== 'Lunas').reduce((s, j) => s + j.harga, 0)
+  const booking = jobsCreated.filter((j) => j.status_edit === 'Masuk').length
+  const sedangEdit = jobsCreated.filter((j) => j.status_edit === 'Sedang Edit').length
+  const revisiCount = jobsCreated.filter((j) => j.status_edit === 'Revisi').length
+  const selesaiCount = jobsCreated.filter((j) => j.status_edit === 'Selesai').length
 
   const statusSeries = [
     { label: 'Selesai', value: selesaiCount, color: STATUS_COLORS.Selesai },
@@ -402,46 +418,50 @@ export default function Reports() {
   const monthlyRevenue = useMemo(() => {
     return monthList.map(({ year, month, label }) => {
       const key = `${year}-${String(month + 1).padStart(2, '0')}`
-      const total = jobs.filter((j) => (j.tanggal_lunas ?? '').startsWith(key) && j.status_bayar === 'Lunas').reduce((s, j) => s + j.harga, 0)
+      const total = jobsPaid.filter((j) => (j.tanggal_lunas ?? '').startsWith(key)).reduce((s, j) => s + j.harga, 0)
       return { label, total }
     })
-  }, [jobs, monthList])
+  }, [jobsPaid, monthList])
 
   const jenisDist = useMemo(() => {
     const map = new Map<string, number>()
-    for (const j of jobs) map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + 1)
+    for (const j of jobsCreated) map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + 1)
     return Array.from(map.entries()).map(([label, value], i) => ({ label, value, color: DONUT_PALETTE[i % DONUT_PALETTE.length] })).sort((a, b) => b.value - a.value)
-  }, [jobs])
+  }, [jobsCreated])
 
   const vendorPerformance = useMemo(() => {
     const map = new Map<string, { name: string; totalJob: number; pendapatan: number; outstanding: number; selesai: number; belumBayar: number }>()
     for (const v of vendors) map.set(v.nama, { name: v.nama, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0, belumBayar: 0 })
-    for (const j of jobs) {
+    for (const j of jobsCreated) {
       const name = j.vendor?.nama ?? 'Tanpa Vendor'
       if (!map.has(name)) map.set(name, { name, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0, belumBayar: 0 })
       const s = map.get(name)!
       s.totalJob++
-      if (j.status_bayar === 'Lunas') s.pendapatan += j.harga
-      else {
+      if (j.status_bayar !== 'Lunas') {
         s.outstanding += j.harga
         s.belumBayar++
       }
       if (j.status_edit === 'Selesai') s.selesai++
     }
+    for (const j of jobsPaid) {
+      const name = j.vendor?.nama ?? 'Tanpa Vendor'
+      if (!map.has(name)) map.set(name, { name, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0, belumBayar: 0 })
+      map.get(name)!.pendapatan += j.harga
+    }
     return Array.from(map.values()).sort((a, b) => b.pendapatan - a.pendapatan)
-  }, [jobs, vendors])
+  }, [jobsCreated, jobsPaid, vendors])
 
   const jenisRevenue = useMemo(() => {
     const map = new Map<string, number>()
-    for (const j of jobs) {
-      if (j.status_bayar === 'Lunas') map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + j.harga)
+    for (const j of jobsPaid) {
+      map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + j.harga)
     }
     return Array.from(map.entries()).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
-  }, [jobs])
+  }, [jobsPaid])
 
   const revisionJobs = useMemo(() => {
-    return jobs.filter((j) => j.status_edit === 'Revisi' || (j.catatan?.toLowerCase().includes('revisi')))
-  }, [jobs])
+    return jobsCreated.filter((j) => j.status_edit === 'Revisi' || (j.catatan?.toLowerCase().includes('revisi')))
+  }, [jobsCreated])
 
   const monthLabels = monthlyRevenue.map((m) => m.label.split(' ')[0])
 
@@ -450,14 +470,14 @@ export default function Reports() {
   const monthlyJobs = useMemo(() => {
     return monthList.map(({ year, month }) => {
       const key = `${year}-${String(month + 1).padStart(2, '0')}`
-      return jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === key).length
+      return jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === key).length
     })
-  }, [jobs, monthList])
+  }, [jobsCreated, monthList])
 
   const trendSeries = [
-    { label: 'Selesai', color: '#10b981', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.tanggal_lunas ?? '').startsWith(m.label.replace(' ', '-')) && j.status_edit === 'Selesai').length) },
-    { label: 'Sedang Edit', color: '#f97316', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Sedang Edit').length) },
-    { label: 'Batal', color: '#e11d48', data: monthlyRevenue.map((m) => jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Batal').length) },
+    { label: 'Selesai', color: '#10b981', data: monthList.map((m) => jobsPaid.filter((j) => (j.tanggal_lunas ?? '').startsWith(m.label.replace(' ', '-')) && j.status_edit === 'Selesai').length) },
+    { label: 'Sedang Edit', color: '#f97316', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Sedang Edit').length) },
+    { label: 'Batal', color: '#e11d48', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === m.label.replace(' ', '-') && j.status_edit === 'Batal').length) },
   ]
 
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set())
@@ -472,20 +492,20 @@ export default function Reports() {
 
   const dayCounts = useMemo(() => {
     const arr = new Array(31).fill(0)
-    for (const j of jobs) {
+    for (const j of jobsCreated) {
       const d = j.deadline ? Number(j.deadline.slice(8, 10)) : NaN
       if (d >= 1 && d <= 31) arr[d - 1]++
     }
     return arr
-  }, [jobs])
+  }, [jobsCreated])
 
   const revisionDaily = useMemo(() => {
     return monthList.map(({ year, month, label }) => {
       const key = `${year}-${String(month + 1).padStart(2, '0')}`
-      const count = jobs.filter((j) => (j.created_at ?? '').slice(0, 7) === key && (j.status_edit === 'Revisi' || (j.catatan ?? '').toLowerCase().includes('revisi'))).length
+      const count = jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === key && (j.status_edit === 'Revisi' || (j.catatan ?? '').toLowerCase().includes('revisi'))).length
       return { label: label.split(' ')[0], count }
     })
-  }, [jobs, monthList])
+  }, [jobsCreated, monthList])
 
   /* ─── Export ───────────────────────────────────── */
 
@@ -498,7 +518,7 @@ export default function Reports() {
       const [y, m, d] = v.split('-')
       return y && m && d ? `${d}/${m}/${y}` : v
     }
-    const exportJobs = jobs.filter((j) => j.status_bayar === 'Lunas')
+    const exportJobs = jobsPaid
     const rows = exportJobs.map((j) => [
       j.nama_project, j.vendor?.nama ?? '-', j.jenis_edit, fmtHarga(j.harga), fmtDate(j.deadline),
       j.status_edit, j.status_bayar, j.status_cetak, fmtDate(j.tanggal_lunas), j.catatan ? String(j.catatan) : '-',
@@ -1003,8 +1023,8 @@ export default function Reports() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {jenisDist.map((d) => {
-                    const selesai = jobs.filter((j) => j.jenis_edit === d.label && j.status_edit === 'Selesai').length
-                    const pendapatan = jobs.filter((j) => j.jenis_edit === d.label && j.status_bayar === 'Lunas').reduce((s, j) => s + j.harga, 0)
+                    const selesai = jobsCreated.filter((j) => j.jenis_edit === d.label && j.status_edit === 'Selesai').length
+                    const pendapatan = jobsPaid.filter((j) => j.jenis_edit === d.label).reduce((s, j) => s + j.harga, 0)
                     const avg = d.value > 0 ? Math.round(pendapatan / d.value) : 0
                     return (
                       <tr key={d.label} className="hover:bg-slate-50/50">

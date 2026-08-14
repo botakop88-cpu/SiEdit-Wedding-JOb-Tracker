@@ -66,7 +66,8 @@ export default function Dashboard() {
     const [totalRes, belumBayarRes, deadlineRes, chartRes, deadlineJobsRes, recentRes, statusRes, lineRes, vendorRes, piutangRes] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('status_bayar', 'Belum Bayar'),
-      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('deadline', today),
+      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('deadline', today)
+        .not('status_edit', 'in', '("Selesai")'),
       supabase.from('job').select('harga, tanggal_lunas').is('deleted_at', null).eq('status_bayar', 'Lunas').gte('tanggal_lunas', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
         .not('deadline', 'is', null).gte('deadline', today).lte('deadline', maxDeadline)
