@@ -48,11 +48,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    loadData()
-  }, [])
+    if (user) loadData()
+  }, [user?.id])
 
   async function loadData() {
     setLoading(true)
+    try {
     const now = new Date()
     const today = todayStr()
     const start = new Date(now.getFullYear(), now.getMonth() - 5, 1)
@@ -65,10 +66,13 @@ export default function Dashboard() {
 
     const [totalRes, belumBayarRes, deadlineRes, chartRes, deadlineJobsRes, recentRes, statusRes, lineRes, vendorRes, piutangRes] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
-      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('status_bayar', 'Belum Bayar'),
+      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).neq('status_bayar', 'Lunas'),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('deadline', today)
         .not('status_edit', 'in', '("Selesai")'),
-      supabase.from('job').select('harga, tanggal_lunas').is('deleted_at', null).eq('status_bayar', 'Lunas').gte('tanggal_lunas', startStr),
+      // Basis grafik pendapatan: job_payment (mencakup DP/cicilan), bukan cuma job Lunas
+      // penuh — supaya DP yang diterima bulan ini ikut terhitung sebagai pendapatan
+      // bulan ini walau job-nya baru lunas penuh di bulan lain (atau belum lunas sama sekali).
+      supabase.from('job_payment').select('jumlah, tanggal').gte('tanggal', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
         .not('deadline', 'is', null).gte('deadline', today).lte('deadline', maxDeadline)
         .not('status_edit', 'in', '("Selesai")').order('deadline').limit(10),
@@ -76,10 +80,10 @@ export default function Dashboard() {
       supabase.from('job').select('status_edit').is('deleted_at', null),
       supabase.from('job').select('created_at, status_edit, tanggal_lunas').is('deleted_at', null),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null),
-      supabase.from('job').select('harga').is('deleted_at', null).eq('status_bayar', 'Belum Bayar'),
+      supabase.from('job').select('harga, total_dibayar').is('deleted_at', null).neq('status_bayar', 'Lunas'),
     ])
 
-    const chartRows = (chartRes.data ?? []) as { harga: number; tanggal_lunas: string | null }[]
+    const chartRows = (chartRes.data ?? []) as { jumlah: number; tanggal: string }[]
     const thisMonthKey = monthKey(now)
     const lastMonthKey = monthKey(lastMonthStart)
     let pendapatanIni = 0
@@ -90,11 +94,10 @@ export default function Dashboard() {
       buckets.set(monthKey(d), 0)
     }
     for (const row of chartRows) {
-      if (!row.tanggal_lunas) continue
-      const k = (row.tanggal_lunas as string).slice(0, 7)
-      if (buckets.has(k)) buckets.set(k, (buckets.get(k) ?? 0) + row.harga)
-      if (k === thisMonthKey) pendapatanIni += row.harga
-      if (k === lastMonthKey) pendapatanLalu += row.harga
+      const k = row.tanggal.slice(0, 7)
+      if (buckets.has(k)) buckets.set(k, (buckets.get(k) ?? 0) + row.jumlah)
+      if (k === thisMonthKey) pendapatanIni += row.jumlah
+      if (k === lastMonthKey) pendapatanLalu += row.jumlah
     }
 
     setBarData(Array.from(buckets.entries()).map(([k, v]) => {
@@ -136,8 +139,8 @@ export default function Dashboard() {
     }
     setStatusCounts(counts)
 
-    const piutangRows = (piutangRes.data ?? []) as { harga: number }[]
-    setPiutang(piutangRows.reduce((sum, r) => sum + (r.harga || 0), 0))
+    const piutangRows = (piutangRes.data ?? []) as { harga: number; total_dibayar: number }[]
+    setPiutang(piutangRows.reduce((sum, r) => sum + Math.max(0, (r.harga || 0) - (r.total_dibayar || 0)), 0))
 
     const allRows = (lineRes.data ?? []) as { created_at: string | null; status_edit: string; tanggal_lunas: string | null }[]
     const summary = { masuk: 0, sedangEdit: 0, revisi: 0, siapKirim: 0, vendorBayar: 0 }
@@ -177,7 +180,11 @@ export default function Dashboard() {
         .sort((a, b) => b.jobs - a.jobs)
         .slice(0, 3)
     )
-    setLoading(false)
+    } catch {
+      // error handled silently — data stays stale
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (loading) {
@@ -196,7 +203,7 @@ export default function Dashboard() {
       {/* Header: Greeting + Search */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Selamat Pagi, {firstName}! 👋</h1>
+          <h1 className="text-xl font-bold text-slate-900">{(() => { const h = new Date().getHours(); if (h < 11) return 'Selamat Pagi'; if (h < 15) return 'Selamat Siang'; if (h < 18) return 'Selamat Sore'; return 'Selamat Malam'; })()}, {firstName}! 👋</h1>
           <p className="text-sm text-slate-500 mt-1">Semangat! Kamu punya {stats.deadlineHariIni} deadline hari ini.</p>
         </div>
         <div className="hidden md:flex items-center gap-3">
@@ -242,7 +249,7 @@ export default function Dashboard() {
               <CreditCard className="w-5 h-5 text-orange-500" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm text-slate-500 font-medium mb-1">Belum Bayar</p>
+              <p className="text-sm text-slate-500 font-medium mb-1">Belum Lunas</p>
               <p className="text-2xl font-bold text-slate-900">{stats.belumBayar}</p>
               <p className="text-xs text-orange-600 mt-1">Total {rupiah(piutang)}</p>
             </div>

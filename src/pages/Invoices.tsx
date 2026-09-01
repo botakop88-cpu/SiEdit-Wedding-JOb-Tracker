@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Plus, Printer, Trash2, History, ReceiptText, CheckCircle2, Clock3 } from 'lucide-react'
+import { Plus, Printer, Trash2, History, ReceiptText, CheckCircle2, Clock3, Wallet } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import { useToast } from '../lib/ToastContext'
-import type { Vendor, Job, Invoice, InvoiceItem } from '../lib/types'
-import { rupiah, formatDate, todayStr } from '../lib/utils'
+import type { Vendor, Job, Invoice, InvoiceItem, UserSettings } from '../lib/types'
+import { rupiah, formatDate, todayStr, escapeHtml, escapeHtmlBold } from '../lib/utils'
+import { recordInvoicePayment, reverseInvoicePayments, sisaTagihan } from '../lib/payments'
+import InvoicePaymentModal from '../components/InvoicePaymentModal'
 
 export default function Invoices() {
   const { user } = useAuth()
@@ -25,32 +27,43 @@ export default function Invoices() {
   const [riwayatHasMore, setRiwayatHasMore] = useState(true)
   const [riwayatLoading, setRiwayatLoading] = useState(false)
   const RIWAYAT_PAGE_SIZE = 20
+  const [invoiceSettings, setInvoiceSettings] = useState<Pick<UserSettings, 'nama_studio' | 'invoice_logo_url' | 'invoice_footer'> | null>(null)
+  const [payModalInvoice, setPayModalInvoice] = useState<Invoice | null>(null)
 
-  useEffect(() => { loadInitial() }, [])
+  useEffect(() => { if (user) loadInitial() }, [user?.id])
 
   async function loadSummary() {
     // Ambil kolom ringan saja (bukan items_json) untuk semua invoice aktif,
     // supaya kartu ringkasan akurat walau riwayat sudah lebih dari 1 halaman.
     const { data } = await supabase
       .from('invoice')
-      .select('status_bayar, total')
+      .select('id, status_bayar, total')
       .is('deleted_at', null)
-    const rows = (data ?? []) as Pick<Invoice, 'status_bayar' | 'total'>[]
+    const rows = (data ?? []) as Pick<Invoice, 'id' | 'status_bayar' | 'total'>[]
+    // Sudah dibayar per invoice (dari ledger cicilan invoice_payment) — dipakai untuk
+    // menampilkan Piutang sebagai SISA tagihan, bukan total penuh invoice DP.
+    const { data: payRows } = await supabase.from('invoice_payment').select('invoice_id, jumlah')
+    const paidMap: Record<string, number> = {}
+    for (const p of (payRows ?? []) as { invoice_id: string; jumlah: number }[]) {
+      paidMap[p.invoice_id] = (paidMap[p.invoice_id] ?? 0) + p.jumlah
+    }
     setSummary({
       totalCount: rows.length,
       totalLunas: rows.filter((r) => r.status_bayar === 'Lunas').reduce((s, r) => s + r.total, 0),
-      totalPiutang: rows.filter((r) => r.status_bayar !== 'Lunas').reduce((s, r) => s + r.total, 0),
+      totalPiutang: rows.filter((r) => r.status_bayar !== 'Lunas').reduce((s, r) => s + Math.max(0, r.total - (paidMap[r.id] ?? 0)), 0),
     })
   }
 
   async function loadInitial() {
     setLoading(true)
+    try {
     const [vRes, iRes] = await Promise.all([
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
       // First page of riwayat only
       supabase.from('invoice').select('*').is('deleted_at', null).order('created_at', { ascending: false })
         .range(0, RIWAYAT_PAGE_SIZE - 1),
       loadSummary(),
+      loadInvoiceSettings(),
     ])
     if (vRes.data) setVendors(vRes.data as Vendor[])
     if (iRes.data) {
@@ -58,7 +71,21 @@ export default function Invoices() {
       setRiwayatHasMore((iRes.data?.length ?? 0) === RIWAYAT_PAGE_SIZE)
     }
     setRiwayatPage(1)
-    setLoading(false)
+    } catch {
+      // error handled silently — data stays stale
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadInvoiceSettings() {
+    if (!user) return
+    const { data } = await supabase
+      .from('user_settings')
+      .select('nama_studio, invoice_logo_url, invoice_footer')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (data) setInvoiceSettings(data as Pick<UserSettings, 'nama_studio' | 'invoice_logo_url' | 'invoice_footer'>)
   }
 
   async function loadMoreRiwayat() {
@@ -106,7 +133,7 @@ export default function Invoices() {
       .from('job')
       .select('*')
       .eq('vendor_id', vendorId)
-      .eq('status_bayar', 'Belum Bayar')
+      .neq('status_bayar', 'Lunas')
       .is('deleted_at', null)
       .order('created_at')
 
@@ -125,7 +152,7 @@ export default function Invoices() {
   }
 
   const selectedJobs = unpaidJobs.filter((j) => checked.has(j.id))
-  const total = selectedJobs.reduce((s, j) => s + j.harga, 0)
+  const total = selectedJobs.reduce((s, j) => s + sisaTagihan(j.harga, j.total_dibayar), 0)
 
   // Parse items_json dengan aman — data lama/korup tidak boleh mematikan halaman.
   function parseItems(itemsJson: string | null): InvoiceItem[] {
@@ -166,7 +193,7 @@ export default function Invoices() {
     const items: InvoiceItem[] = selectedJobs.map((j) => ({
       job_id: j.id,
       nama_project: j.nama_project,
-      harga: j.harga,
+      harga: sisaTagihan(j.harga, j.total_dibayar),
       jenis: j.jenis_edit,
     }))
 
@@ -223,12 +250,20 @@ export default function Invoices() {
         (it, i) =>
           `<tr>
             <td style="padding:8px;border-bottom:1px solid #e2e8f0">${i + 1}</td>
-            <td style="padding:8px;border-bottom:1px solid #e2e8f0">${it.nama_project}</td>
-            <td style="padding:8px;border-bottom:1px solid #e2e8f0">${it.jenis}</td>
+            <td style="padding:8px;border-bottom:1px solid #e2e8f0">${escapeHtml(it.nama_project)}</td>
+            <td style="padding:8px;border-bottom:1px solid #e2e8f0">${escapeHtml(it.jenis)}</td>
             <td style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:right">${rupiah(it.harga)}</td>
           </tr>`,
       )
       .join('')
+
+    const logoHtml = invoiceSettings?.invoice_logo_url
+      ? `<img src="${escapeHtml(invoiceSettings.invoice_logo_url)}" alt="Logo" style="max-height:56px;max-width:180px;object-fit:contain;margin-bottom:8px" />`
+      : ''
+    const studioName = invoiceSettings?.nama_studio?.trim() || 'INVOICE'
+    const footerHtml = invoiceSettings?.invoice_footer?.trim()
+      ? `<div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;white-space:pre-wrap">${escapeHtmlBold(invoiceSettings.invoice_footer.trim())}</div>`
+      : ''
 
     const html = `<!DOCTYPE html><html><head><title>${number}</title>
       <style>
@@ -239,17 +274,19 @@ export default function Invoices() {
         th{text-align:left;padding:8px;border-bottom:2px solid #1e293b;font-size:12px;text-transform:uppercase;color:#64748b}
         .total{text-align:right;font-size:18px;font-weight:700;margin-top:16px}
       </style></head><body>
-        <h1>INVOICE</h1>
+        ${logoHtml}
+        <h1>${escapeHtml(studioName)}</h1>
         <div class="meta">
-          <div><strong>${number}</strong></div>
-          <div>Kepada: ${vendorNama}</div>
-          <div>Tanggal: ${formatDate(tanggal)}</div>
+          <div><strong>${escapeHtml(number)}</strong></div>
+          <div>Kepada: ${escapeHtml(vendorNama)}</div>
+          <div>Tanggal: ${escapeHtml(formatDate(tanggal))}</div>
         </div>
         <table>
           <thead><tr><th>No</th><th>Project</th><th>Jenis</th><th style="text-align:right">Harga</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
         <div class="total">Total: ${rupiah(totalAmount)}</div>
+        ${footerHtml}
         <script>window.onload=function(){window.print()}</script>
       </body></html>`
 
@@ -261,34 +298,30 @@ export default function Invoices() {
   }
 
   async function toggleStatus(inv: Invoice) {
-    const newStatus = inv.status_bayar === 'Lunas' ? 'Belum Bayar' : 'Lunas'
-    const items: InvoiceItem[] = parseItems(inv.items_json)
-    const jobIds = items.map((i) => i.job_id)
-
-    const { error: invErr } = await supabase
-      .from('invoice')
-      .update({ status_bayar: newStatus, user_id: user!.id })
-      .eq('id', inv.id)
-
-    if (invErr) return toast({ type: 'error', title: 'Gagal update invoice', message: invErr.message })
-
-    // Sync jobs by ID (reliable - no name collision)
-    const jobUpdate: Record<string, unknown> = {
-      status_bayar: newStatus,
-      updated_at: new Date().toISOString(),
-      user_id: user!.id,
+    // Invoice DP: klik badge membuka modal pembayaran (biar tidak ambigu) —
+    // bukan toggle satu klik seperti Belum Bayar/Lunas.
+    if (inv.status_bayar === 'DP') {
+      setPayModalInvoice(inv)
+      return
     }
-    if (newStatus === 'Lunas') jobUpdate.tanggal_lunas = todayStr()
-    else jobUpdate.tanggal_lunas = null
+    const newStatus = inv.status_bayar === 'Lunas' ? 'Belum Bayar' : 'Lunas'
 
-    const { error: jobErr } = await supabase
-      .from('job')
-      .update(jobUpdate)
-      .in('id', jobIds)
-      .is('deleted_at', null)
-
-    if (jobErr) toast({ type: 'error', title: 'Invoice diupdate, tapi gagal sync job', message: jobErr.message })
-    else toast({ type: 'success', title: `Invoice ditandai ${newStatus}` })
+    try {
+      if (newStatus === 'Lunas') {
+        // Pelunasan penuh satu klik: catat sebagai SATU pembayaran invoice yang
+        // otomatis dibagikan ke job-job di dalamnya (record_invoice_payment).
+        await recordInvoicePayment(inv.id, inv.total, todayStr(), `Pelunasan via invoice ${inv.nomor ?? ''}`.trim())
+        toast({ type: 'success', title: 'Invoice ditandai Lunas' })
+      } else {
+        // Batalkan: hapus semua pembayaran (job_payment + invoice_payment) yang
+        // tercatat berasal dari invoice ini, lalu kembalikan status invoice.
+        await reverseInvoicePayments(inv.id)
+        await supabase.from('invoice').update({ status_bayar: 'Belum Bayar' }).eq('id', inv.id)
+        toast({ type: 'success', title: 'Invoice ditandai Belum Bayar' })
+      }
+    } catch (err) {
+      toast({ type: 'error', title: 'Gagal update status', message: (err as Error).message })
+    }
 
     await loadInitial()
   }
@@ -398,9 +431,12 @@ export default function Invoices() {
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-900 truncate">{j.nama_project}</p>
-                      <p className="text-xs text-slate-500">{j.jenis_edit}</p>
+                      <p className="text-xs text-slate-500">
+                        {j.jenis_edit}
+                        {j.status_bayar === 'DP' && <span className="ml-1.5 text-amber-600 font-medium">· sudah DP {rupiah(j.total_dibayar)}</span>}
+                      </p>
                     </div>
-                    <span className="text-sm font-medium text-slate-600 shrink-0">{rupiah(j.harga)}</span>
+                    <span className="text-sm font-medium text-slate-600 shrink-0">{rupiah(sisaTagihan(j.harga, j.total_dibayar))}</span>
                   </label>
                 ))}
               </div>
@@ -449,6 +485,7 @@ export default function Invoices() {
                           <h3 className="font-bold text-sm text-slate-900 truncate">{inv.vendor_nama}</h3>
                           <button
                             onClick={() => toggleStatus(inv)}
+                            title={inv.status_bayar === 'DP' ? 'Buka pembayaran invoice' : 'Klik untuk toggle status'}
                             className={`badge cursor-pointer border ${
                               inv.status_bayar === 'Lunas'
                                 ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/20'
@@ -464,6 +501,11 @@ export default function Invoices() {
                       </div>
                     </div>
                     <div className="flex gap-2 shrink-0">
+                      {inv.status_bayar !== 'Lunas' && (
+                        <button onClick={() => setPayModalInvoice(inv)} className="flex items-center gap-1 text-xs text-emerald-500 hover:text-emerald-400 font-semibold px-3 py-1.5 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/10 transition-colors">
+                          <Wallet className="w-3.5 h-3.5" /> Bayar
+                        </button>
+                      )}
                       <button onClick={() => reprint(inv)} className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 font-semibold px-3 py-1.5 border border-sky-500/25 rounded-lg hover:bg-sky-500/10 transition-colors">
                         <Printer className="w-3.5 h-3.5" /> Cetak
                       </button>
@@ -486,6 +528,14 @@ export default function Invoices() {
             </>
           )}
         </div>
+      )}
+
+      {payModalInvoice && (
+        <InvoicePaymentModal
+          invoice={payModalInvoice}
+          onClose={() => setPayModalInvoice(null)}
+          onChanged={() => loadInitial()}
+        />
       )}
     </div>
   )

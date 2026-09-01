@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Bell, Settings, RefreshCw, Send } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
@@ -105,9 +106,9 @@ export default function Notifications() {
       )}
 
       <div className="text-center">
-        <a href="/settings" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-rose-400 transition-colors">
+        <Link to="/settings" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-rose-400 transition-colors">
           <Settings className="w-3.5 h-3.5" /> Hubungkan Telegram di Pengaturan
-        </a>
+        </Link>
       </div>
     </div>
   )

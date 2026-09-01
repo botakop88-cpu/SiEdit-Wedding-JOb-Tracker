@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { Camera, Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../lib/AuthContext'
 
 export default function ResetPassword() {
   const { user, loading, updatePassword } = useAuth()
+  const navigate = useNavigate()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [showPw, setShowPw] = useState(false)
@@ -31,14 +32,13 @@ export default function ResetPassword() {
     if (err) setError(err.message)
     else {
       setSuccess(true)
-      // Refresh session state
-      window.location.reload()
+      setTimeout(() => navigate('/login'), 1500)
     }
     setSubmitting(false)
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-rose-900 px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-rose-500 to-orange-400 shadow-xl shadow-rose-500/30 mb-4">
@@ -48,14 +48,14 @@ export default function ResetPassword() {
           <p className="text-slate-400 mt-1">Wedding Job Tracker</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-white/90 backdrop-blur rounded-2xl border border-slate-300 shadow-2xl shadow-black/50 p-8 space-y-5">
+        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl p-8 space-y-5">
           <h2 className="text-xl font-bold text-slate-900">Atur Password Baru</h2>
 
           {error && (
-            <div className="bg-red-500/10 text-red-300 border border-red-500/25 text-sm rounded-xl px-4 py-3">{error}</div>
+            <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-3">{error}</div>
           )}
           {success && (
-            <div className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 text-sm rounded-xl px-4 py-3">
+            <div className="bg-emerald-50 text-emerald-600 text-sm rounded-lg px-4 py-3">
               Password berhasil diubah! Mengarahkan ke dashboard...
             </div>
           )}

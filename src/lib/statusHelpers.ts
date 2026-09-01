@@ -6,7 +6,7 @@ export type StatusValue = StatusEdit | StatusBayar | StatusCetak
 
 export function getStatusOptions(type: StatusType): StatusValue[] {
   if (type === 'edit') return ['Masuk', 'Sedang Edit', 'Revisi', 'Selesai']
-  if (type === 'bayar') return ['Belum Bayar', 'Lunas']
+  if (type === 'bayar') return ['Belum Bayar', 'DP', 'Lunas']
   return ['Belum Cetak', 'Sudah Dikirim', 'Sudah Cetak']
 }
 
@@ -18,7 +18,9 @@ export function getStatusBadgeClass(type: StatusType, value: string): string {
     return 'bg-emerald-100 text-emerald-700'
   }
   if (type === 'bayar') {
-    return value === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+    if (value === 'Lunas') return 'bg-emerald-100 text-emerald-700'
+    if (value === 'DP') return 'bg-sky-100 text-sky-700'
+    return 'bg-amber-100 text-amber-700'
   }
   return value === 'Sudah Cetak' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
 }

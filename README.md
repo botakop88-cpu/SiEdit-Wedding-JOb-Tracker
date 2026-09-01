@@ -57,8 +57,8 @@ Klik item di daftar deadline atau aktivitas untuk langsung ke halaman Job.
 1. Klik **Tambah**
 2. Pilih **Vendor** — harga otomatis terisi sesuai konfigurasi vendor
 3. Isi Nama Project, pilih Jenis Edit (harga bisa diubah manual)
-4. Atur Deadline, Status Edit, Status Bayar, Status Cetak
-5. Klik **Simpan**
+4. Atur Deadline, Status Edit, Status Cetak
+5. Klik **Simpan** — status bayar dimulai dari "Belum Bayar", kelola pembayarannya lewat tombol status bayar di daftar job (lihat **Pembayaran / DP / Cicilan** di bawah)
 
 **Filter & Cari:**
 - **Search**: Cari berdasarkan nama project atau nama vendor
@@ -108,8 +108,28 @@ Klik item di daftar deadline atau aktivitas untuk langsung ke halaman Job.
 **Export CSV:**
 - Klik tombol **CSV** di samping filter
 - File akan otomatis terdownload dengan format `data-lunas-siedit-YYYY-MM-YYYY-MM.csv`
+- Isinya per BARIS PEMBAYARAN (bukan per job) — kalau 1 job dibayar 2x (DP lalu pelunasan), akan muncul sebagai 2 baris sesuai tanggal masing-masing diterima
+
+### 5.5 Pembayaran / DP / Cicilan
+
+- Klik badge status bayar (Belum Bayar/DP/Lunas) di daftar job untuk membuka modal Pembayaran
+- Catat pembayaran sebagian (DP) atau penuh — status job otomatis berubah: Belum Bayar → DP → Lunas
+- Riwayat tiap pembayaran tersimpan (tanggal, jumlah, catatan) dan bisa dihapus kalau salah catat
+- Semua angka pendapatan (Dashboard, Laporan) dihitung dari tanggal pembayaran ini — DP yang diterima bulan ini tetap terhitung sebagai pendapatan bulan ini walau job-nya baru lunas penuh bulan depan
+- Tandai invoice Lunas / bulk "Tandai Lunas" / bot Telegram `/lunas` otomatis melunasi **sisa tagihan** (bukan harga penuh) kalau job sudah pernah ada DP-nya
 
 ### 6. Pengaturan & Recycle Bin
+
+**Kustomisasi Invoice:**
+- Upload logo studio (otomatis dikecilkan, max 400px)
+- Atur nama studio & catatan kaki (contoh: info rekening transfer)
+- Diterapkan otomatis ke invoice yang dicetak dari halaman Invoice
+
+**Backup Data:**
+- Backup seluruh data (vendor, job, riwayat pembayaran, invoice) dibuat **otomatis tiap hari**, disimpan 14 hari terakhir
+- Tombol **Backup Sekarang** untuk backup manual kapan saja
+- Klik ikon download di daftar backup untuk mengunduh file JSON-nya
+- **Setup awal** (sekali saja, lihat `docs/setup-cron-backup.sql`): perlu dijalankan manual di Supabase SQL Editor untuk mengaktifkan jadwal cron-nya
 
 **Informasi Aplikasi:**
 - Versi, tipe database, mode multi-user, email terdaftar

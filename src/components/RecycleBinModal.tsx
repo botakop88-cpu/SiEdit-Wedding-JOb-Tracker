@@ -29,9 +29,9 @@ export default function RecycleBinModal({ open, onClose }: { open: boolean; onCl
   async function loadData() {
     setLoading(true)
     const [j, v, i] = await Promise.all([
-      supabase.from('job').select('*').not('deleted_at', 'is', null),
-      supabase.from('vendor').select('*').not('deleted_at', 'is', null),
-      supabase.from('invoice').select('*').not('deleted_at', 'is', null),
+      supabase.from('job').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      supabase.from('vendor').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+      supabase.from('invoice').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
     ])
     if (!j.error) setJobs((j.data ?? []) as Job[])
     if (!v.error) setVendors((v.data ?? []) as Vendor[])

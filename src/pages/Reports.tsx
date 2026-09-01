@@ -8,6 +8,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', '
 interface RawJob {
   nama_project: string
   harga: number
+  total_dibayar: number
   tanggal_lunas: string | null
   deadline: string | null
   created_at: string
@@ -17,6 +18,14 @@ interface RawJob {
   status_cetak: string
   catatan: string | null
   vendor: { nama: string } | null
+}
+
+interface RawPayment {
+  id: string
+  job_id: string
+  jumlah: number
+  tanggal: string
+  job: { nama_project: string; jenis_edit: string; vendor: { nama: string } | null } | null
 }
 
 interface VendorRow {
@@ -322,11 +331,12 @@ export default function Reports() {
   const curYear = now.getFullYear()
 
   const [tab, setTab] = useState<TabId>('ringkasan')
-  const [fromMonth, setFromMonth] = useState(curMonth - 5 >= 0 ? curMonth - 5 : 0)
-  const [fromYear, setFromYear] = useState(curMonth - 5 >= 0 ? curYear : curYear - 1)
+  const [fromMonth, setFromMonth] = useState(curMonth >= 5 ? curMonth - 5 : curMonth + 7)
+  const [fromYear, setFromYear] = useState(curMonth >= 5 ? curYear : curYear - 1)
   const [toMonth, setToMonth] = useState(curMonth)
   const [toYear, setToYear] = useState(curYear)
   const [jobs, setJobs] = useState<RawJob[]>([])
+  const [payments, setPayments] = useState<RawPayment[]>([])
   const [vendors, setVendors] = useState<VendorRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -362,15 +372,23 @@ export default function Reports() {
     setError('')
     const from = dateStr(fromYear, fromMonth) + '-01'
     const to = monthEnd(toYear, toMonth)
-    const [jobRes, vendorRes] = await Promise.all([
+    const [jobRes, paymentRes, vendorRes] = await Promise.all([
       supabase
         .from('job')
-        .select('nama_project, harga, tanggal_lunas, deadline, created_at, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
+        .select('nama_project, harga, total_dibayar, tanggal_lunas, deadline, created_at, jenis_edit, status_edit, status_bayar, status_cetak, catatan, vendor:vendor_id(nama)')
         .is('deleted_at', null)
-        // Ambil job yang DIBUAT dalam periode (untuk hitungan job masuk) ATAU
-        // yang DILUNASI (tanggal_lunas) dalam periode (untuk angka uang/pendapatan).
-        .or(`and(created_at.gte.${from},created_at.lte.${to}T23:59:59),and(tanggal_lunas.gte.${from},tanggal_lunas.lte.${to})`)
+        .gte('created_at', from)
+        .lte('created_at', to + 'T23:59:59')
         .order('created_at', { ascending: false }),
+      // Basis SEMUA angka uang/pendapatan: baris pembayaran (DP/cicilan/lunas) yang
+      // tanggalnya ada di periode ini — bukan job.tanggal_lunas, supaya DP yang diterima
+      // di periode ini ikut terhitung walau job-nya baru lunas penuh di periode lain.
+      supabase
+        .from('job_payment')
+        .select('id, job_id, jumlah, tanggal, job:job_id(nama_project, jenis_edit, vendor:vendor_id(nama))')
+        .gte('tanggal', from)
+        .lte('tanggal', to)
+        .order('tanggal', { ascending: false }),
       supabase.from('vendor').select('id, nama').is('deleted_at', null),
     ])
     if (jobRes.error) {
@@ -378,31 +396,29 @@ export default function Reports() {
       setLoading(false)
       return
     }
+    if (paymentRes.error) {
+      setError(paymentRes.error.message)
+      setLoading(false)
+      return
+    }
     setJobs((jobRes.data ?? []) as unknown as RawJob[])
+    setPayments((paymentRes.data ?? []) as unknown as RawPayment[])
     setVendors((vendorRes.data ?? []) as VendorRow[])
     setLoading(false)
   }
 
   /* ─── Computed ───────────────────────────────────── */
 
-  const fromStr = dateStr(fromYear, fromMonth) + '-01'
-  const toStr = monthEnd(toYear, toMonth)
-
-  // Dua kumpulan dipisah sesuai basis tanggalnya:
-  // - jobsCreated: job yang MASUK (dibuat) dalam periode -> untuk hitungan job
-  // - jobsPaid:    job yang uangnya MASUK (dilunasi) dalam periode -> untuk angka pendapatan
-  const jobsCreated = jobs.filter((j) => {
-    const c = (j.created_at ?? '').slice(0, 10)
-    return c >= fromStr && c <= toStr
-  })
-  const jobsPaid = jobs.filter((j) => {
-    if (j.status_bayar !== 'Lunas' || !j.tanggal_lunas) return false
-    return j.tanggal_lunas >= fromStr && j.tanggal_lunas <= toStr
-  })
+  // jobsCreated: job yang MASUK (dibuat) dalam periode -> untuk hitungan job/status.
+  // payments (dari state, sudah difilter tanggal di query): SEMUA baris pembayaran
+  // (DP/cicilan/lunas) di periode ini -> basis SEMUA angka uang/pendapatan. Ini penting
+  // supaya DP yang diterima bulan ini tetap terhitung sebagai pendapatan bulan ini, walau
+  // job-nya baru lunas penuh (atau belum lunas sama sekali) di bulan lain.
+  const jobsCreated = jobs
 
   const totalJobs = jobsCreated.length
-  const totalPendapatan = jobsPaid.reduce((s, j) => s + j.harga, 0)
-  const totalOutstanding = jobsCreated.filter((j) => j.status_bayar !== 'Lunas').reduce((s, j) => s + j.harga, 0)
+  const totalPendapatan = payments.reduce((s, p) => s + p.jumlah, 0)
+  const totalOutstanding = jobsCreated.reduce((s, j) => s + Math.max(0, j.harga - (j.total_dibayar ?? 0)), 0)
   const booking = jobsCreated.filter((j) => j.status_edit === 'Masuk').length
   const sedangEdit = jobsCreated.filter((j) => j.status_edit === 'Sedang Edit').length
   const revisiCount = jobsCreated.filter((j) => j.status_edit === 'Revisi').length
@@ -418,10 +434,10 @@ export default function Reports() {
   const monthlyRevenue = useMemo(() => {
     return monthList.map(({ year, month, label }) => {
       const key = `${year}-${String(month + 1).padStart(2, '0')}`
-      const total = jobsPaid.filter((j) => (j.tanggal_lunas ?? '').startsWith(key)).reduce((s, j) => s + j.harga, 0)
+      const total = payments.filter((p) => p.tanggal.startsWith(key)).reduce((s, p) => s + p.jumlah, 0)
       return { label, total }
     })
-  }, [jobsPaid, monthList])
+  }, [payments, monthList])
 
   const jenisDist = useMemo(() => {
     const map = new Map<string, number>()
@@ -438,26 +454,30 @@ export default function Reports() {
       const s = map.get(name)!
       s.totalJob++
       if (j.status_bayar !== 'Lunas') {
-        s.outstanding += j.harga
+        s.outstanding += Math.max(0, j.harga - (j.total_dibayar ?? 0))
         s.belumBayar++
       }
       if (j.status_edit === 'Selesai') s.selesai++
     }
-    for (const j of jobsPaid) {
-      const name = j.vendor?.nama ?? 'Tanpa Vendor'
+    // Pendapatan dihitung TERPISAH dari populasi payments (basis tanggal pembayaran),
+    // supaya job vendor yang dibuat di luar periode tapi dibayar (DP/cicilan/lunas) di
+    // dalam periode tetap tercatat pendapatannya untuk vendor itu.
+    for (const p of payments) {
+      const name = p.job?.vendor?.nama ?? 'Tanpa Vendor'
       if (!map.has(name)) map.set(name, { name, totalJob: 0, pendapatan: 0, outstanding: 0, selesai: 0, belumBayar: 0 })
-      map.get(name)!.pendapatan += j.harga
+      map.get(name)!.pendapatan += p.jumlah
     }
     return Array.from(map.values()).sort((a, b) => b.pendapatan - a.pendapatan)
-  }, [jobsCreated, jobsPaid, vendors])
+  }, [jobsCreated, payments, vendors])
 
   const jenisRevenue = useMemo(() => {
     const map = new Map<string, number>()
-    for (const j of jobsPaid) {
-      map.set(j.jenis_edit, (map.get(j.jenis_edit) ?? 0) + j.harga)
+    for (const p of payments) {
+      const jenis = p.job?.jenis_edit ?? '-'
+      map.set(jenis, (map.get(jenis) ?? 0) + p.jumlah)
     }
     return Array.from(map.entries()).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
-  }, [jobsPaid])
+  }, [payments])
 
   const revisionJobs = useMemo(() => {
     return jobsCreated.filter((j) => j.status_edit === 'Revisi' || (j.catatan?.toLowerCase().includes('revisi')))
@@ -474,8 +494,11 @@ export default function Reports() {
     })
   }, [jobsCreated, monthList])
 
+  // Catatan: "Selesai" di grafik trend ini sengaja dihitung dari status job SEKARANG yang
+  // dibuat di bulan itu (konsisten dengan "Sedang Edit"/"Batal"), bukan dari tanggal
+  // pembayaran seperti versi sebelumnya — supaya definisinya konsisten antar 3 garis.
   const trendSeries = [
-    { label: 'Selesai', color: '#10b981', data: monthList.map((m) => jobsPaid.filter((j) => (j.tanggal_lunas ?? '').startsWith(`${m.year}-${String(m.month + 1).padStart(2, '0')}`) && j.status_edit === 'Selesai').length) },
+    { label: 'Selesai', color: '#10b981', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === `${m.year}-${String(m.month + 1).padStart(2, '0')}` && j.status_edit === 'Selesai').length) },
     { label: 'Sedang Edit', color: '#f97316', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === `${m.year}-${String(m.month + 1).padStart(2, '0')}` && j.status_edit === 'Sedang Edit').length) },
     { label: 'Batal', color: '#e11d48', data: monthList.map((m) => jobsCreated.filter((j) => (j.created_at ?? '').slice(0, 7) === `${m.year}-${String(m.month + 1).padStart(2, '0')}` && j.status_edit === 'Batal').length) },
   ]
@@ -511,19 +534,17 @@ export default function Reports() {
 
   async function dataExportXLSX() {
     const { default: ExcelJS } = await import('exceljs')
-    const cols = ['PROYEK', 'VENDOR', 'JENIS EDIT', 'HARGA', 'DEADLINE', 'STATUS EDIT', 'STATUS BAYAR', 'STATUS CETAK', 'TANGGAL LUNAS', 'CATATAN']
+    const cols = ['TANGGAL BAYAR', 'PROYEK', 'VENDOR', 'JENIS EDIT', 'JUMLAH DIBAYAR']
     const fmtHarga = (v: number) => 'Rp' + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
     const fmtDate = (v: string | null | undefined) => {
       if (!v) return '-'
       const [y, m, d] = v.split('-')
       return y && m && d ? `${d}/${m}/${y}` : v
     }
-    const exportJobs = jobsPaid
-    const rows = exportJobs.map((j) => [
-      j.nama_project, j.vendor?.nama ?? '-', j.jenis_edit, fmtHarga(j.harga), fmtDate(j.deadline),
-      j.status_edit, j.status_bayar, j.status_cetak, fmtDate(j.tanggal_lunas), j.catatan ? String(j.catatan) : '-',
+    const rows = payments.map((p) => [
+      fmtDate(p.tanggal), p.job?.nama_project ?? '-', p.job?.vendor?.nama ?? '-', p.job?.jenis_edit ?? '-', fmtHarga(p.jumlah),
     ])
-    const totalLunas = exportJobs.reduce((s, j) => s + j.harga, 0)
+    const totalLunas = payments.reduce((s, p) => s + p.jumlah, 0)
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('Laporan SiEdit')
     const periode = `${monthList[0]?.label ?? ''} — ${monthList[monthList.length - 1]?.label ?? ''}`
@@ -545,13 +566,13 @@ export default function Reports() {
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE11D48' } }
     rows.forEach((r) => sheet.addRow(r))
-    const totalRow = sheet.addRow(['TOTAL', '', `${exportJobs.length} job`, fmtHarga(totalLunas), '', '', '', '', '', ''])
+    const totalRow = sheet.addRow(['TOTAL', '', '', `${payments.length} pembayaran`, fmtHarga(totalLunas)])
     totalRow.font = { bold: true }
     totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1F2' } }
-    const allRows = [cols, ...rows, ['TOTAL', '', `${exportJobs.length} job`, fmtHarga(totalLunas), '', '', '', '', '', '']]
+    const allRows = [cols, ...rows, ['TOTAL', '', '', `${payments.length} pembayaran`, fmtHarga(totalLunas)]]
     cols.forEach((_, ci) => {
       const maxLen = allRows.reduce((m, r) => Math.max(m, String(r[ci] ?? '').length), cols[ci].length)
-      sheet.getColumn(ci + 1).width = ci === 9 ? Math.min(Math.max(maxLen + 2, 15), 60) : Math.min(Math.max(maxLen + 2, 10), 45)
+      sheet.getColumn(ci + 1).width = Math.min(Math.max(maxLen + 2, 10), 45)
     })
     sheet.views = [{ state: 'frozen', ySplit: 3 }]
     const buffer = await workbook.xlsx.writeBuffer()
@@ -1024,7 +1045,7 @@ export default function Reports() {
                 <tbody className="divide-y divide-slate-100">
                   {jenisDist.map((d) => {
                     const selesai = jobsCreated.filter((j) => j.jenis_edit === d.label && j.status_edit === 'Selesai').length
-                    const pendapatan = jobsPaid.filter((j) => j.jenis_edit === d.label).reduce((s, j) => s + j.harga, 0)
+                    const pendapatan = payments.filter((p) => (p.job?.jenis_edit ?? '-') === d.label).reduce((s, p) => s + p.jumlah, 0)
                     const avg = d.value > 0 ? Math.round(pendapatan / d.value) : 0
                     return (
                       <tr key={d.label} className="hover:bg-slate-50/50">
