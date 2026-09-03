@@ -80,7 +80,7 @@ function buildMessage(
   for (const g of groups) {
     if (g.items.length === 0) continue
     lines.push(`${g.header} (${g.items.length})`)
-    for (const it of g.items) lines.push(`• ${it}`)
+    for (const it of g.items) lines.push(`   • ${it}`)
     lines.push('')
   }
   return lines.join('\n').trim()
