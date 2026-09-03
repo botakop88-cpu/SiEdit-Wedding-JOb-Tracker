@@ -16,7 +16,7 @@ const STATUS_BAYAR = ['Belum Bayar', 'Lunas']
 const STATUS_CETAK = ['Belum Cetak', 'Sudah Dikirim', 'Sudah Cetak']
 
 type WizardData = {
-  mode?: 'tambah' | 'lunas'
+  mode?: 'tambah' | 'buatinvoice' | 'bayar_invoice'
   nama_project?: string
   vendor_id?: string
   vendor_list?: { id: string; nama: string }[]
@@ -28,8 +28,15 @@ type WizardData = {
   status_bayar?: string
   status_cetak?: string
   catatan?: string | null
-  lunas_list?: { id: string; nama_project: string; sisa: number; vendor_nama: string }[]
-  lunas_pick?: number
+  invoice_vendor_id?: string
+  invoice_vendor_list?: { id: string; nama: string; job_count: number }[]
+  invoice_jobs?: { id: string; nama_project: string; sisa: number; jenis_edit: string }[]
+  invoice_selected?: number[]
+  invoice_confirm?: { vendor_nama: string; total: number; items: string[] }
+  invoice_list?: { id: string; nomor: string; vendor_nama: string; total: number; sisa: number; status_bayar: string }[]
+  invoice_pick?: number
+  bayar_jumlah?: number
+  bayar_tanggal?: string
 }
 
 function fmtRupiah(n: number): string {
@@ -120,8 +127,9 @@ const HELP_TEXT =
   '📋 PERINTAH SiEdit BOT\n' +
   `${SEP}\n` +
   '/tambah — Tambah job baru\n' +
+  '/buatinvoice — Buat invoice dari job\n' +
+  '/cekinvoice — Lihat & kelola invoice\n' +
   '/belumbayar — Daftar job belum bayar\n' +
-  '/lunas — Tandai job lunas\n' +
   '/deadline — Job mendekati deadline\n' +
   '/batal — Batalkan proses berjalan\n' +
   '/help — Bantuan ini\n' +
@@ -171,9 +179,14 @@ async function handleWizard(
   const data = (user.wizard_data ?? {}) as WizardData
   const mode = data.mode ?? 'tambah'
 
-  // Mode /lunas: tandai job lunas
-  if (mode === 'lunas') {
-    return handleLunasWizard(supabase, token, chatId, text, user)
+  // Mode /buatinvoice
+  if (mode === 'buatinvoice') {
+    return handleBuatinvoiceWizard(supabase, token, chatId, text, user)
+  }
+
+  // Mode /bayar invoice
+  if (mode === 'bayar_invoice') {
+    return handleBayarInvoiceWizard(supabase, token, chatId, text, user)
   }
 
   const prompt = wizardPrompts[step - 1]
@@ -291,110 +304,6 @@ async function handleWizard(
   return true
 }
 
-async function handleLunasWizard(
-  supabase: ReturnType<typeof createClient>,
-  token: string,
-  chatId: number,
-  text: string,
-  user: Record<string, unknown>,
-) {
-  const step = user.wizard_step as number
-  const data = (user.wizard_data ?? {}) as WizardData
-  const list = data.lunas_list ?? []
-
-  if (step === 1) {
-    const n = text.trim()
-    if (!/^\d+$/.test(n)) {
-      await sendMessage(token, chatId, '⚠️ Kirim nomor dari daftar, atau /batal.')
-      return true
-    }
-    const idx = Number(n) - 1
-    if (idx < 0 || idx >= list.length) {
-      await sendMessage(token, chatId, `⚠️ Nomor tidak valid. Pilih 1-${list.length}, atau /batal.`)
-      return true
-    }
-    const pick = list[idx]
-    data.lunas_pick = idx
-    await supabase
-      .from('user_settings')
-      .update({ wizard_step: 2, wizard_data: data, updated_at: new Date().toISOString() })
-      .eq('user_id', user.user_id as string)
-    await sendMessage(
-      token,
-      chatId,
-      `💳 KONFIRMASI LUNAS\n${SEP}\n` +
-        `📌 ${pick.nama_project}\n` +
-        `🏢 ${pick.vendor_nama}\n` +
-        `💰 ${fmtRupiah(pick.sisa)}\n\n` +
-        'Balas "ya" untuk menandai LUNAS,\natau "batal".',
-    )
-    return true
-  }
-
-  // step 2 = konfirmasi
-  const reply = text.toLowerCase()
-  if (reply === 'batal' || reply === 'tidak' || reply === 'no') {
-    await clearWizard(supabase, user.user_id as string)
-    await sendMessage(token, chatId, '🚫 Dibatalkan.')
-    return true
-  }
-  if (reply !== 'ya' && reply !== 'yes' && reply !== 'simpan') {
-    await sendMessage(token, chatId, 'Balas "ya" untuk menandai LUNAS,\natau "batal".')
-    return true
-  }
-
-  const pick = list[data.lunas_pick ?? 0]
-  if (!pick) {
-    await clearWizard(supabase, user.user_id as string)
-    await sendMessage(token, chatId, '⚠️ Data tidak ditemukan. Coba /lunas lagi.')
-    return true
-  }
-
-  const WIB = 7 * 60 * 60 * 1000
-  const nowWIB = new Date(Date.now() + WIB)
-  const today = nowWIB.getFullYear() + '-' +
-    String(nowWIB.getMonth() + 1).padStart(2, '0') + '-' +
-    String(nowWIB.getDate()).padStart(2, '0')
-
-  if (pick.sisa <= 0) {
-    await clearWizard(supabase, user.user_id as string)
-    await sendMessage(token, chatId, `ℹ️ "${pick.nama_project}" sudah lunas.`)
-    return true
-  }
-
-  // Kalau job sudah masuk invoice aktif, lewati record_job_payment dan catat lewat
-  // record_invoice_payment supaya ledger cicilan invoice & Piutang web ikut konsisten
-  // (model "semua pembayaran lewat invoice"). Alokasi otomatis membayar job paling
-  // awal dulu, sesuai aturan invoice.
-  const invLink = await resolveJobInvoice(supabase, pick.id)
-  let error: { message: string } | null = null
-  if (invLink) {
-    const amount = Math.min(pick.sisa, invLink.sisa)
-    ;({ error } = await supabase.rpc('record_invoice_payment', {
-      p_invoice_id: invLink.invoice_id,
-      p_jumlah: amount,
-      p_tanggal: today,
-      p_catatan: 'Pelunasan via bot Telegram',
-    }))
-  } else {
-    ;({ error } = await supabase.rpc('record_job_payment', {
-      p_job_id: pick.id,
-      p_jumlah: pick.sisa,
-      p_tanggal: today,
-      p_catatan: 'Pelunasan via bot Telegram',
-      p_invoice_id: null,
-    }))
-  }
-
-  await clearWizard(supabase, user.user_id as string)
-  if (error) {
-    await sendMessage(token, chatId, `⚠️ Gagal menandai lunas: ${error.message}`)
-  } else {
-    await sendMessage(token, chatId, `✅ "${pick.nama_project}" ditandai LUNAS\n(${formatDate(today)}).`)
-  }
-  return true
-}
-
 // Cari invoice aktif yang memuat job ini. Kalau ada, kembalikan id invoice + sisa
 // tagihan invoice (agar pembayaran tidak melebihi sisa invoice).
 async function resolveJobInvoice(
@@ -423,6 +332,408 @@ async function resolveJobInvoice(
     return null
   }
   return null
+}
+
+async function handleBuatinvoiceWizard(
+  supabase: ReturnType<typeof createClient>,
+  token: string,
+  chatId: number,
+  text: string,
+  user: Record<string, unknown>,
+) {
+  const step = user.wizard_step as number
+  const data = (user.wizard_data ?? {}) as WizardData
+
+  // Step 1: Pilih vendor
+  if (step === 1) {
+    const n = text.trim()
+    if (!/^\d+$/.test(n)) {
+      await sendMessage(token, chatId, '⚠️ Kirim nomor vendor dari daftar, atau /batal.')
+      return true
+    }
+    const idx = Number(n) - 1
+    const list = data.invoice_vendor_list ?? []
+    if (idx < 0 || idx >= list.length) {
+      await sendMessage(token, chatId, `⚠️ Nomor tidak valid. Pilih 1-${list.length}, atau /batal.`)
+      return true
+    }
+    const vendor = list[idx]
+    data.invoice_vendor_id = vendor.id
+    // Ambil job belum bayar untuk vendor ini yang belum ada di invoice aktif
+    const { data: allJobs } = await supabase
+      .from('job')
+      .select('id, nama_project, harga, total_dibayar, jenis_edit')
+      .eq('user_id', user.user_id as string)
+      .eq('vendor_id', vendor.id)
+      .eq('status_bayar', 'Belum Bayar')
+      .is('deleted_at', null)
+      .order('created_at')
+    // Filter out job yang sudah ada di invoice aktif
+    const { data: activeInvs } = await supabase
+      .from('invoice')
+      .select('items_json')
+      .eq('user_id', user.user_id as string)
+      .eq('vendor_id', vendor.id)
+      .is('deleted_at', null)
+    const invoicedJobIds = new Set<string>()
+    for (const inv of activeInvs ?? []) {
+      try {
+        const items = JSON.parse(inv.items_json ?? '[]') as { job_id?: string }[]
+        for (const it of items) { if (it.job_id) invoicedJobIds.add(it.job_id) }
+      } catch { /* skip */ }
+    }
+    const availableJobs = (allJobs ?? [])
+      .filter((j) => !invoicedJobIds.has(j.id))
+      .map((j) => ({
+        id: j.id,
+        nama_project: j.nama_project,
+        sisa: Math.max(0, (j.harga ?? 0) - (j.total_dibayar ?? 0)),
+        jenis_edit: j.jenis_edit ?? '-',
+      }))
+      .filter((j) => j.sisa > 0)
+    if (availableJobs.length === 0) {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, `ℹ️ Tidak ada job belum bayar untuk ${vendor.nama} yang bisa dibuat invoice.`)
+      return true
+    }
+    data.invoice_jobs = availableJobs
+    data.invoice_selected = availableJobs.map((_, i) => i) // semua terpilih
+    await supabase
+      .from('user_settings')
+      .update({ wizard_step: 2, wizard_data: data, updated_at: new Date().toISOString() })
+      .eq('user_id', user.user_id as string)
+    await sendMessage(token, chatId, buildInvoiceSelectText(data))
+    return true
+  }
+
+  // Step 2: Toggle job selection
+  if (step === 2) {
+    const t = text.trim().toLowerCase()
+    const jobs = data.invoice_jobs ?? []
+    const selected = [...(data.invoice_selected ?? [])]
+
+    if (t === 'ok' || t === 'ya' || t === 'lanjut') {
+      if (selected.length === 0) {
+        await sendMessage(token, chatId, '⚠️ Pilih minimal 1 job. Kirim nomor untuk toggle.')
+        return true
+      }
+      // Hitung total
+      const total = selected.reduce((s, i) => s + (jobs[i]?.sisa ?? 0), 0)
+      const items = selected.map((i) => `${jobs[i].nama_project} — ${fmtRupiah(jobs[i].sisa)}`)
+      data.invoice_confirm = {
+        vendor_nama: data.invoice_vendor_list?.find((v) => v.id === data.invoice_vendor_id)?.nama ?? '-',
+        total,
+        items,
+      }
+      await supabase
+        .from('user_settings')
+        .update({ wizard_step: 3, wizard_data: data, updated_at: new Date().toISOString() })
+        .eq('user_id', user.user_id as string)
+      const itemLines = items.map((it, i) => `${i + 1}. ${it}`).join('\n')
+      await sendMessage(
+        token,
+        chatId,
+        `📝 KONFIRMASI INVOICE\n${SEP}\n🏢 Vendor: ${data.invoice_confirm.vendor_nama}\n\n${itemLines}\n\n💰 Total: ${fmtRupiah(total)}\n\nBalas "ya" untuk menyimpan,\natau "batal" untuk membatalkan.`,
+      )
+      return true
+    }
+
+    // Parse toggle: "3,5" or "3" etc
+    const nums = t.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)
+    const toggleSet = new Set<number>()
+    let valid = true
+    for (const s of nums) {
+      if (!/^\d+$/.test(s)) { valid = false; break }
+      const n = Number(s) - 1
+      if (n < 0 || n >= jobs.length) { valid = false; break }
+      toggleSet.add(n)
+    }
+    if (!valid) {
+      await sendMessage(token, chatId, '⚠️ Format salah. Kirim angka dipisah koma (contoh: 3,5),\n"ok" untuk lanjut, atau /batal.')
+      return true
+    }
+    // Toggle
+    for (const i of toggleSet) {
+      const idx = selected.indexOf(i)
+      if (idx >= 0) selected.splice(idx, 1)
+      else selected.push(i)
+    }
+    selected.sort((a, b) => a - b)
+    data.invoice_selected = selected
+    await supabase
+      .from('user_settings')
+      .update({ wizard_data: data, updated_at: new Date().toISOString() })
+      .eq('user_id', user.user_id as string)
+    await sendMessage(token, chatId, buildInvoiceSelectText(data))
+    return true
+  }
+
+  // Step 3: Konfirmasi
+  if (step === 3) {
+    const reply = text.toLowerCase()
+    if (reply === 'batal' || reply === 'tidak' || reply === 'no') {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, '🚫 Dibatalkan.')
+      return true
+    }
+    if (reply !== 'ya' && reply !== 'yes' && reply !== 'simpan') {
+      await sendMessage(token, chatId, 'Balas "ya" untuk menyimpan,\natau "batal" untuk membatalkan.')
+      return true
+    }
+    const confirm = data.invoice_confirm
+    const selected = data.invoice_selected ?? []
+    const jobs = data.invoice_jobs ?? []
+    if (!confirm || selected.length === 0) {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, '⚠️ Data tidak lengkap. Coba /buatinvoice lagi.')
+      return true
+    }
+    // Generate nomor invoice (scan ALL invoices termasuk deleted untuk hindari duplikat)
+    let invNumber = ''
+    let invErr: { message: string; code?: string } | null = null
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data: lastInv } = await supabase
+        .from('invoice')
+        .select('nomor')
+        .eq('user_id', user.user_id as string)
+        .not('nomor', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      let nextNum = 1
+      if (lastInv && lastInv.length > 0) {
+        const lastNomor = lastInv[0].nomor ?? ''
+        const m = lastNomor.match(/(\d+)$/)
+        if (m) nextNum = Number(m[1]) + 1
+      }
+      invNumber = `INV-${String(nextNum).padStart(4, '0')}`
+      const items = selected.map((i) => ({
+        job_id: jobs[i].id,
+        nama_project: jobs[i].nama_project,
+        harga: jobs[i].sisa,
+        jenis: jobs[i].jenis_edit,
+      }))
+      const vendorNama = data.invoice_vendor_list?.find((v) => v.id === data.invoice_vendor_id)?.nama ?? '-'
+      const today = new Date().toISOString().slice(0, 10)
+      const { error } = await supabase.from('invoice').insert({
+        user_id: user.user_id as string,
+        vendor_id: data.invoice_vendor_id,
+        vendor_nama: vendorNama,
+        tanggal: today,
+        items_json: JSON.stringify(items),
+        total: confirm.total,
+        status_bayar: 'Belum Bayar',
+        nomor: invNumber,
+      })
+      if (!error) { invErr = null; break }
+      invErr = error as { message: string; code?: string }
+      if (invErr.code !== '23505') break
+    }
+    await clearWizard(supabase, user.user_id as string)
+    if (invErr) {
+      await sendMessage(token, chatId, `⚠️ Gagal membuat invoice: ${invErr.message}`)
+      return true
+    }
+    const itemLines = confirm.items.map((it, i) => `${i + 1}. ${it}`).join('\n')
+    await sendMessage(
+      token,
+      chatId,
+      `✅ INVOICE DIBUAT\n${SEP}\n📋 Nomor    : ${invNumber}\n🏢 Vendor   : ${vendorNama}\n📅 Tanggal  : ${formatDate(today)}\n💰 Total    : ${fmtRupiah(confirm.total)}\n💳 Status   : Belum Bayar\n${SEP}\n📌 Job:\n${itemLines}\n${SEP}`,
+    )
+    return true
+  }
+
+  return false
+}
+
+function buildInvoiceSelectText(data: WizardData): string {
+  const jobs = data.invoice_jobs ?? []
+  const selected = new Set(data.invoice_selected ?? [])
+  const total = [...selected].reduce((s, i) => s + (jobs[i]?.sisa ?? 0), 0)
+  const lines = jobs.map((j, i) => {
+    const check = selected.has(i) ? '✅' : '❌'
+    return `${check} ${i + 1}. ${j.nama_project} — ${j.jenis_edit} — ${fmtRupiah(j.sisa)}`
+  })
+  return (
+    `📋 PILIH JOB (${jobs.length} total, ${selected.size} terpilih)\n${SEP}\n` +
+    lines.join('\n') +
+    `\n${SEP}\n💰 Total: ${fmtRupiah(total)}\n\n` +
+    'Kirim angka dipisah koma untuk toggle,\n"ok" untuk lanjut, atau /batal.'
+  )
+}
+
+async function handleBayarInvoiceWizard(
+  supabase: ReturnType<typeof createClient>,
+  token: string,
+  chatId: number,
+  text: string,
+  user: Record<string, unknown>,
+) {
+  const step = user.wizard_step as number
+  const data = (user.wizard_data ?? {}) as WizardData
+  const list = data.invoice_list ?? []
+
+  // Step 1: Pilih invoice dari daftar
+  if (step === 1) {
+    const n = text.trim()
+    if (!/^\d+$/.test(n)) {
+      await sendMessage(token, chatId, '⚠️ Kirim nomor invoice dari daftar, atau /batal.')
+      return true
+    }
+    const idx = Number(n) - 1
+    if (idx < 0 || idx >= list.length) {
+      await sendMessage(token, chatId, `⚠️ Nomor tidak valid. Pilih 1-${list.length}, atau /batal.`)
+      return true
+    }
+    const inv = list[idx]
+    data.invoice_pick = idx
+    await supabase
+      .from('user_settings')
+      .update({ wizard_step: 2, wizard_data: data, updated_at: new Date().toISOString() })
+      .eq('user_id', user.user_id as string)
+    const actions = inv.status_bayar === 'Lunas'
+      ? 'Balas:\n• "hapus" — hapus invoice ini'
+      : 'Balas:\n• "bayar" — catat pembayaran\n• "batal bayar" — batalkan semua pembayaran\n• "hapus" — hapus invoice ini'
+    await sendMessage(
+      token,
+      chatId,
+      `🧾 ${inv.nomor}\n${SEP}\n🏢 Vendor   : ${inv.vendor_nama}\n📅 Tanggal  : ${inv.nomor}\n💰 Total    : ${fmtRupiah(inv.total)}\n💳 Dibayar  : ${fmtRupiah(inv.total - inv.sisa)}\n💳 Sisa     : ${fmtRupiah(inv.sisa)}\n📊 Status   : ${inv.status_bayar}\n${SEP}\n${actions}`,
+    )
+    return true
+  }
+
+  // Step 2: Handle aksi
+  if (step === 2) {
+    const reply = text.trim().toLowerCase()
+    const inv = list[data.invoice_pick ?? 0]
+    if (!inv) {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, '⚠️ Data tidak ditemukan. Coba /cekinvoice lagi.')
+      return true
+    }
+
+    if (reply === 'hapus') {
+      await supabase
+        .from('invoice')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', inv.id)
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, `🗑️ Invoice ${inv.nomor} dihapus.`)
+      return true
+    }
+
+    if (reply === 'batal bayar') {
+      await supabase.rpc('reverse_invoice_payments', { p_invoice_id: inv.id })
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, `↩️ Semua pembayaran ${inv.nomor} dibatalkan.\nStatus: Belum Bayar`)
+      return true
+    }
+
+    if (reply === 'bayar') {
+      if (inv.sisa <= 0) {
+        await clearWizard(supabase, user.user_id as string)
+        await sendMessage(token, chatId, `ℹ️ Invoice ${inv.nomor} sudah lunas.`)
+        return true
+      }
+      data.mode = 'bayar_invoice'
+      data.bayar_jumlah = undefined
+      await supabase
+        .from('user_settings')
+        .update({ wizard_step: 3, wizard_data: data, updated_at: new Date().toISOString() })
+        .eq('user_id', user.user_id as string)
+      await sendMessage(
+        token,
+        chatId,
+        `💳 BAYAR ${inv.nomor}\nSisa: ${fmtRupiah(inv.sisa)}\nKirim jumlah, atau "lunas" untuk full.`,
+      )
+      return true
+    }
+
+    await sendMessage(token, chatId, '⚠️ Pilih: "bayar", "batal bayar", atau "hapus".')
+    return true
+  }
+
+  // Step 3: Jumlah bayar
+  if (step === 3) {
+    const reply = text.trim().toLowerCase()
+    const inv = list[data.invoice_pick ?? 0]
+    if (!inv) {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, '⚠️ Data tidak ditemukan. Coba /cekinvoice lagi.')
+      return true
+    }
+
+    let jumlah = 0
+    if (reply === 'lunas' || reply === 'full') {
+      jumlah = inv.sisa
+    } else {
+      const cleaned = reply.replace(/[^\d]/g, '')
+      if (!cleaned || Number(cleaned) <= 0) {
+        await sendMessage(token, chatId, '⚠️ Kirim jumlah angka, atau "lunas" untuk full.')
+        return true
+      }
+      jumlah = Number(cleaned)
+      if (jumlah > inv.sisa) {
+        await sendMessage(token, chatId, `⚠️ Jumlah melebihi sisa (${fmtRupiah(inv.sisa)}). Kirim ulang.`)
+        return true
+      }
+    }
+    data.bayar_jumlah = jumlah
+    const today = new Date().toISOString().slice(0, 10)
+    data.bayar_tanggal = today
+    await supabase
+      .from('user_settings')
+      .update({ wizard_step: 4, wizard_data: data, updated_at: new Date().toISOString() })
+      .eq('user_id', user.user_id as string)
+    await sendMessage(
+      token,
+      chatId,
+      `💳 KONFIRMASI BAYAR\n${SEP}\n📋 Invoice  : ${inv.nomor}\n💰 Bayar    : ${fmtRupiah(jumlah)}\n📅 Tanggal  : ${formatDate(today)}\n💳 Sisa     : ${fmtRupiah(inv.sisa - jumlah)}\n${SEP}\nBalas "ya" untuk simpan, "batal" untuk batal.`,
+    )
+    return true
+  }
+
+  // Step 4: Konfirmasi bayar
+  if (step === 4) {
+    const reply = text.toLowerCase()
+    if (reply === 'batal' || reply === 'tidak' || reply === 'no') {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, '🚫 Dibatalkan.')
+      return true
+    }
+    if (reply !== 'ya' && reply !== 'yes' && reply !== 'simpan') {
+      await sendMessage(token, chatId, 'Balas "ya" untuk simpan, "batal" untuk batal.')
+      return true
+    }
+    const inv = list[data.invoice_pick ?? 0]
+    const jumlah = data.bayar_jumlah ?? 0
+    const tanggal = data.bayar_tanggal ?? new Date().toISOString().slice(0, 10)
+    if (!inv || jumlah <= 0) {
+      await clearWizard(supabase, user.user_id as string)
+      await sendMessage(token, chatId, '⚠️ Data tidak lengkap. Coba /cekinvoice lagi.')
+      return true
+    }
+    const { error } = await supabase.rpc('record_invoice_payment', {
+      p_invoice_id: inv.id,
+      p_jumlah: jumlah,
+      p_tanggal: tanggal,
+      p_catatan: 'Pembayaran via bot Telegram',
+    })
+    await clearWizard(supabase, user.user_id as string)
+    if (error) {
+      await sendMessage(token, chatId, `⚠️ Gagal mencatat pembayaran: ${error.message}`)
+    } else {
+      const sisaBaru = inv.sisa - jumlah
+      const status = sisaBaru <= 0 ? 'Lunas' : 'DP'
+      await sendMessage(
+        token,
+        chatId,
+        `✅ Pembayaran ${fmtRupiah(jumlah)} dicatat untuk ${inv.nomor}.\n💳 Sisa: ${fmtRupiah(sisaBaru)} — Status: ${status}`,
+      )
+    }
+    return true
+  }
+
+  return false
 }
 
 async function clearWizard(supabase: ReturnType<typeof createClient>, userId: string) {
@@ -650,63 +961,102 @@ Deno.serve(async (req) => {
     }
     return new Response('ok')
   }
-  if (cmd === '/lunas') {
+  if (cmd === '/buatinvoice') {
     const user = await getUserByChat(supabase, chatId)
     if (!user) {
       await sendMessage(token, chatId, NOT_CONNECTED_TEXT)
       return new Response('ok')
     }
-    const { data: jobs, error } = await supabase
+    // Ambil vendor yang punya job belum bayar
+    const { data: vendorRows } = await supabase
       .from('job')
-      .select('id, nama_project, harga, total_dibayar, vendor:vendor_id(nama)')
+      .select('vendor_id, vendor:vendor_id(nama)')
       .eq('user_id', user.user_id)
-      .neq('status_bayar', 'Lunas')
+      .eq('status_bayar', 'Belum Bayar')
+      .is('deleted_at', null)
+    const vendorMap = new Map<string, { id: string; nama: string; job_count: number }>()
+    for (const r of vendorRows ?? []) {
+      const vid = r.vendor_id
+      if (!vid) continue
+      const existing = vendorMap.get(vid)
+      if (existing) { existing.job_count++ } else {
+        vendorMap.set(vid, { id: vid, nama: (r.vendor as { nama: string } | null)?.nama ?? '-', job_count: 1 })
+      }
+    }
+    const vendorList = [...vendorMap.values()].sort((a, b) => a.nama.localeCompare(b.nama))
+    if (vendorList.length === 0) {
+      await sendMessage(token, chatId, '🎉 Tidak ada job yang belum bayar.\nGunakan /tambah untuk membuat job baru.')
+      return new Response('ok')
+    }
+    const data: WizardData = { mode: 'buatinvoice', invoice_vendor_list: vendorList }
+    await supabase
+      .from('user_settings')
+      .update({ wizard_step: 1, wizard_data: data, updated_at: new Date().toISOString() })
+      .eq('user_id', user.user_id)
+    const list = vendorList.map((v, i) => `${i + 1}) ${v.nama} (${v.job_count} job)`).join('\n')
+    await sendMessage(token, chatId, `🧾 BUAT INVOICE (1/3)\n${SEP}\nPilih vendor:\n${list}`)
+    return new Response('ok')
+  }
+  if (cmd === '/cekinvoice') {
+    const user = await getUserByChat(supabase, chatId)
+    if (!user) {
+      await sendMessage(token, chatId, NOT_CONNECTED_TEXT)
+      return new Response('ok')
+    }
+    const { data: invs, error } = await supabase
+      .from('invoice')
+      .select('id, nomor, vendor_nama, total, status_bayar, items_json')
+      .eq('user_id', user.user_id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(10)
-
     if (error) {
       await sendMessage(token, chatId, '⚠️ Terjadi kesalahan saat membaca data.')
       return new Response('ok')
     }
-    if (!jobs || jobs.length === 0) {
-      await sendMessage(token, chatId, '🎉 Semua sudah lunas!')
+    if (!invs || invs.length === 0) {
+      await sendMessage(token, chatId, '📭 Belum ada invoice.\nGunakan /buatinvoice untuk membuat invoice baru.')
       return new Response('ok')
     }
-    const lunasList = jobs
-      .map((j) => ({
-        id: j.id,
-        nama_project: j.nama_project,
-        sisa: Math.max(0, (j.harga ?? 0) - (j.total_dibayar ?? 0)),
-        vendor_nama: j.vendor?.nama ?? '-',
-      }))
-      .sort(cmpVendorThenName)
-    const groups: GroupBlock[] = []
-    const byVendor = new Map<string, number>()
-    for (const j of lunasList) {
-      const key = j.vendor_nama || '-'
-      let gi = byVendor.get(key)
-      if (gi === undefined) {
-        gi = groups.length
-        byVendor.set(key, gi)
-        groups.push({ vendor: key, subtotal: 0, items: [] })
+    const invList = invs.map((inv) => {
+      let items: { harga?: number }[] = []
+      try { items = JSON.parse(inv.items_json ?? '[]') } catch { items = [] }
+      const totalInv = items.reduce((s, it) => s + (it.harga ?? 0), 0)
+      // Hitung sisa dari total - pembayaran
+      return {
+        id: inv.id,
+        nomor: inv.nomor ?? '-',
+        vendor_nama: inv.vendor_nama,
+        total: inv.total ?? totalInv,
+        sisa: inv.total ?? totalInv, // sisa akan dihitung nanti
+        status_bayar: inv.status_bayar ?? 'Belum Bayar',
       }
-      const g = groups[gi]
-      g.subtotal += j.sisa ?? 0
-      g.items.push(`${j.nama_project} — ${fmtRupiah(j.sisa)}`)
+    })
+    // Ambil total pembayaran untuk setiap invoice
+    for (const inv of invList) {
+      const { data: pays } = await supabase
+        .from('invoice_payment')
+        .select('jumlah')
+        .eq('invoice_id', inv.id)
+      const paid = (pays ?? []).reduce((s, p) => s + (p.jumlah ?? 0), 0)
+      inv.sisa = Math.max(0, inv.total - paid)
     }
     await supabase
       .from('user_settings')
       .update({
         wizard_step: 1,
-        wizard_data: { mode: 'lunas', lunas_list: lunasList },
+        wizard_data: { mode: 'bayar_invoice', invoice_list: invList },
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', user.user_id)
+    const lines = invList.map((inv, i) => {
+      const statusIcon = inv.status_bayar === 'Lunas' ? '✅' : inv.status_bayar === 'DP' ? '🟡' : '🔴'
+      return `${i + 1}. ${inv.nomor} — ${inv.vendor_nama} — ${fmtRupiah(inv.total)} — ${statusIcon} ${inv.status_bayar}${inv.status_bayar !== 'Lunas' ? ` (Sisa ${fmtRupiah(inv.sisa)})` : ''}`
+    }).join('\n')
     await sendMessage(
       token,
       chatId,
-      buildGroupedMessage(`✅ PILIH JOB LUNAS (${lunasList.length})`, groups, 'Balas nomor di atas, atau /batal.'),
+      `🧾 INVOICE (${invList.length})\n${SEP}\n${lines}\n${SEP}\nBalas nomor invoice untuk kelola.`,
     )
     return new Response('ok')
   }
@@ -853,7 +1203,6 @@ async function handleQuery(
     .not('deadline', 'is', null)
     .lte('deadline', maxDate)
     .not('status_edit', 'in', '("Selesai")')
-    .neq('status_bayar', 'Lunas')
     .order('deadline')
 
   if (error) {
