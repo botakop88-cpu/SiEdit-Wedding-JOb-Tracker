@@ -89,7 +89,7 @@ export default function Dashboard() {
       supabase.from('job_payment').select('jumlah, tanggal').gte('tanggal', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
         .not('deadline', 'is', null).lte('deadline', maxDeadline)
-        .not('status_edit', 'in', '("Selesai")').order('deadline', { ascending: false }).limit(15),
+        .not('status_edit', 'in', '("Selesai")').order('deadline').limit(15),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('created_at', { ascending: false }).limit(5),
       supabase.from('job').select('status_edit').is('deleted_at', null),
       supabase.from('job').select('created_at, status_edit, tanggal_lunas').is('deleted_at', null),
