@@ -28,7 +28,7 @@ type WizardData = {
   status_bayar?: string
   status_cetak?: string
   catatan?: string | null
-  lunas_list?: { id: string; nama_project: string; harga: number; vendor_nama: string }[]
+  lunas_list?: { id: string; nama_project: string; sisa: number; vendor_nama: string }[]
   lunas_pick?: number
 }
 
@@ -82,9 +82,16 @@ async function getSecret(
   supabase: ReturnType<typeof createClient>,
   name: string,
 ): Promise<string | null> {
-  const { data, error } = await supabase.rpc('siedit_get_secret', { p_name: name })
+  // Baca langsung dari vault (pola sama seperti telegram-dispatch). Service role
+  // melewati RLS, jadi `siedit_get_secret` (wrapper SQL) tidak wajib ada.
+  const { data, error } = await supabase
+    .schema('vault')
+    .from('decrypted_secrets')
+    .select('decrypted_secret')
+    .eq('name', name)
+    .maybeSingle()
   if (error || !data) return null
-  return data as string
+  return data.decrypted_secret as string
 }
 
 async function sendMessage(token: string, chatId: number, text: string) {
@@ -184,6 +191,15 @@ async function handleWizard(
     if (step === 3) {
       const jenis = data.jenis_edit
       const harga = data.jenis_list?.find((j) => j.jenis === jenis)?.harga ?? 0
+      if (harga <= 0) {
+        await clearWizard(supabase, user.user_id)
+        await sendMessage(
+          token,
+          chatId,
+          `⚠️ Harga untuk jenis "${jenis}" tidak valid (harus lebih dari 0).\n\nPerbaiki harga di Pengaturan Vendor di web SiEdit, lalu coba /tambah lagi.`,
+        )
+        return true
+      }
       data.harga = harga
     }
 
@@ -233,6 +249,9 @@ async function handleWizard(
     return true
   }
 
+  // status_bayar/total_dibayar/tanggal_lunas TIDAK boleh di-set langsung (invariant
+  // web: selalu lewat record_job_payment/record_invoice_payment). Job disimpan sebagai
+  // Belum Bayar dulu; kalau user memilih Lunas, pembayarannya dicatat setelah insert.
   const payload = {
     user_id: user.user_id,
     vendor_id: data.vendor_id || null,
@@ -241,20 +260,34 @@ async function handleWizard(
     harga: data.harga ?? 0,
     deadline: data.deadline || null,
     status_edit: data.status_edit,
-    status_bayar: data.status_bayar,
+    status_bayar: 'Belum Bayar',
     status_cetak: data.status_cetak,
     catatan: data.catatan || null,
-    tanggal_lunas: data.status_bayar === 'Lunas' ? new Date().toISOString().slice(0, 10) : null,
+    tanggal_lunas: null,
     updated_at: new Date().toISOString(),
   }
 
-  const { error } = await supabase.from('job').insert(payload)
+  const { data: inserted, error } = await supabase.from('job').insert(payload).select('id').single()
   await clearWizard(supabase, user.user_id)
   if (error) {
     await sendMessage(token, chatId, `⚠️ Gagal menyimpan job: ${error.message}`)
-  } else {
-    await sendMessage(token, chatId, `✅ Job "${data.nama_project}" berhasil\nditambahkan!`)
+    return true
   }
+  if (data.status_bayar === 'Lunas' && inserted?.id) {
+    const today = new Date().toISOString().slice(0, 10)
+    const { error: payErr } = await supabase.rpc('record_job_payment', {
+      p_job_id: inserted.id,
+      p_jumlah: data.harga ?? 0,
+      p_tanggal: today,
+      p_catatan: 'Lunas saat dibuat lewat bot Telegram',
+      p_invoice_id: null,
+    })
+    if (payErr) {
+      await sendMessage(token, chatId, `⚠️ Job tersimpan, tapi gagal mencatat pelunasan: ${payErr.message}`)
+      return true
+    }
+  }
+  await sendMessage(token, chatId, `✅ Job "${data.nama_project}" berhasil\nditambahkan!`)
   return true
 }
 
@@ -292,7 +325,7 @@ async function handleLunasWizard(
       `💳 KONFIRMASI LUNAS\n${SEP}\n` +
         `📌 ${pick.nama_project}\n` +
         `🏢 ${pick.vendor_nama}\n` +
-        `💰 ${fmtRupiah(pick.harga)}\n\n` +
+        `💰 ${fmtRupiah(pick.sisa)}\n\n` +
         'Balas "ya" untuk menandai LUNAS,\natau "batal".',
     )
     return true
@@ -323,15 +356,35 @@ async function handleLunasWizard(
     String(nowWIB.getMonth() + 1).padStart(2, '0') + '-' +
     String(nowWIB.getDate()).padStart(2, '0')
 
-  const { error } = await supabase
-    .from('job')
-    .update({
-      status_bayar: 'Lunas',
-      tanggal_lunas: today,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', pick.id)
-    .eq('user_id', user.user_id as string)
+  if (pick.sisa <= 0) {
+    await clearWizard(supabase, user.user_id as string)
+    await sendMessage(token, chatId, `ℹ️ "${pick.nama_project}" sudah lunas.`)
+    return true
+  }
+
+  // Kalau job sudah masuk invoice aktif, lewati record_job_payment dan catat lewat
+  // record_invoice_payment supaya ledger cicilan invoice & Piutang web ikut konsisten
+  // (model "semua pembayaran lewat invoice"). Alokasi otomatis membayar job paling
+  // awal dulu, sesuai aturan invoice.
+  const invLink = await resolveJobInvoice(supabase, pick.id)
+  let error: { message: string } | null = null
+  if (invLink) {
+    const amount = Math.min(pick.sisa, invLink.sisa)
+    ;({ error } = await supabase.rpc('record_invoice_payment', {
+      p_invoice_id: invLink.invoice_id,
+      p_jumlah: amount,
+      p_tanggal: today,
+      p_catatan: 'Pelunasan via bot Telegram',
+    }))
+  } else {
+    ;({ error } = await supabase.rpc('record_job_payment', {
+      p_job_id: pick.id,
+      p_jumlah: pick.sisa,
+      p_tanggal: today,
+      p_catatan: 'Pelunasan via bot Telegram',
+      p_invoice_id: null,
+    }))
+  }
 
   await clearWizard(supabase, user.user_id as string)
   if (error) {
@@ -340,6 +393,36 @@ async function handleLunasWizard(
     await sendMessage(token, chatId, `✅ "${pick.nama_project}" ditandai LUNAS\n(${formatDate(today)}).`)
   }
   return true
+}
+
+// Cari invoice aktif yang memuat job ini. Kalau ada, kembalikan id invoice + sisa
+// tagihan invoice (agar pembayaran tidak melebihi sisa invoice).
+async function resolveJobInvoice(
+  supabase: ReturnType<typeof createClient>,
+  jobId: string,
+): Promise<{ invoice_id: string; sisa: number } | null> {
+  const { data: job } = await supabase.from('job').select('vendor_id').eq('id', jobId).maybeSingle()
+  if (!job?.vendor_id) return null
+  const { data: invs } = await supabase
+    .from('invoice')
+    .select('id, total, items_json')
+    .eq('vendor_id', job.vendor_id)
+    .is('deleted_at', null)
+  if (!invs) return null
+  for (const inv of invs) {
+    let items: { job_id?: string }[] = []
+    try { items = JSON.parse(inv.items_json ?? '[]') } catch { items = [] }
+    if (!items.some((it) => it.job_id === jobId)) continue
+    const { data: payRows } = await supabase
+      .from('invoice_payment')
+      .select('jumlah')
+      .eq('invoice_id', inv.id)
+    const paid = (payRows ?? []).reduce((s, p) => s + (p.jumlah ?? 0), 0)
+    const sisa = Math.max(0, (inv.total ?? 0) - paid)
+    if (sisa > 0) return { invoice_id: inv.id, sisa }
+    return null
+  }
+  return null
 }
 
 async function clearWizard(supabase: ReturnType<typeof createClient>, userId: string) {
@@ -575,7 +658,7 @@ Deno.serve(async (req) => {
     }
     const { data: jobs, error } = await supabase
       .from('job')
-      .select('id, nama_project, harga, vendor:vendor_id(nama)')
+      .select('id, nama_project, harga, total_dibayar, vendor:vendor_id(nama)')
       .eq('user_id', user.user_id)
       .neq('status_bayar', 'Lunas')
       .is('deleted_at', null)
@@ -594,7 +677,7 @@ Deno.serve(async (req) => {
       .map((j) => ({
         id: j.id,
         nama_project: j.nama_project,
-        harga: j.harga,
+        sisa: Math.max(0, (j.harga ?? 0) - (j.total_dibayar ?? 0)),
         vendor_nama: j.vendor?.nama ?? '-',
       }))
       .sort(cmpVendorThenName)
@@ -609,8 +692,8 @@ Deno.serve(async (req) => {
         groups.push({ vendor: key, subtotal: 0, items: [] })
       }
       const g = groups[gi]
-      g.subtotal += j.harga ?? 0
-      g.items.push(`${j.nama_project} — ${fmtRupiah(j.harga)}`)
+      g.subtotal += j.sisa ?? 0
+      g.items.push(`${j.nama_project} — ${fmtRupiah(j.sisa)}`)
     }
     await supabase
       .from('user_settings')

@@ -25,12 +25,29 @@ export interface Job {
   status_bayar: StatusBayar
   status_cetak: StatusCetak
   tanggal_lunas: string | null
+  total_dibayar: number
   catatan: string | null
   created_at: string
   updated_at: string | null
   deleted_at: string | null
   // Joined field
   vendor?: Pick<Vendor, 'nama'> | null
+}
+
+// Riwayat tiap kali ada pembayaran (DP/cicilan/pelunasan) untuk 1 job.
+// job.total_dibayar & job.status_bayar SELALU dihitung ulang dari jumlah baris-baris
+// ini (lewat fungsi database record_job_payment/delete_job_payment) — jangan pernah
+// diubah manual dari frontend, supaya tidak ada 2 sumber data yang bisa beda lagi.
+export interface JobPayment {
+  id: string
+  user_id: string
+  job_id: string
+  invoice_id: string | null
+  invoice_payment_id: string | null
+  jumlah: number
+  tanggal: string
+  catatan: string | null
+  created_at: string
 }
 
 export interface VendorPriceItem {
@@ -66,6 +83,16 @@ export interface InvoiceItem {
   jenis: string
 }
 
+export interface InvoicePayment {
+  id: string
+  user_id: string
+  invoice_id: string
+  jumlah: number
+  tanggal: string
+  catatan: string | null
+  created_at: string
+}
+
 export interface UserSettings {
   id: string
   user_id: string
@@ -73,6 +100,9 @@ export interface UserSettings {
   telegram_connect_code: string | null
   telegram_connect_expires: string | null
   notif_jam: string | null
+  nama_studio: string | null
+  invoice_logo_url: string | null
+  invoice_footer: string | null
   created_at: string
   updated_at: string | null
 }
@@ -84,7 +114,8 @@ export interface UserSettings {
 // Jenis Edit sekarang selalu mengikuti persis apa yang diisi di menu Vendor.
 export type JenisEdit = 'Kolase Sudah Pilih' | 'Kolase Belum Pilih' | 'Edit Full'
 export type StatusEdit = 'Masuk' | 'Sedang Edit' | 'Revisi' | 'Selesai'
-export type StatusBayar = 'Belum Bayar' | 'Lunas'
+// 'DP' = sudah dibayar sebagian (total_dibayar > 0 tapi < harga)
+export type StatusBayar = 'Belum Bayar' | 'DP' | 'Lunas'
 export type StatusCetak = 'Belum Cetak' | 'Sudah Dikirim' | 'Sudah Cetak'
 
 export const JENIS_EDIT_OPTIONS: JenisEdit[] = [
@@ -100,7 +131,7 @@ export const STATUS_EDIT_OPTIONS: StatusEdit[] = [
   'Selesai',
 ]
 
-export const STATUS_BAYAR_OPTIONS: StatusBayar[] = ['Belum Bayar', 'Lunas']
+export const STATUS_BAYAR_OPTIONS: StatusBayar[] = ['Belum Bayar', 'DP', 'Lunas']
 export const STATUS_CETAK_OPTIONS: StatusCetak[] = ['Belum Cetak', 'Sudah Dikirim', 'Sudah Cetak']
 
 // ─── Filter helper ───────────────────────────────────────────────
@@ -108,6 +139,7 @@ export const STATUS_CETAK_OPTIONS: StatusCetak[] = ['Belum Cetak', 'Sudah Dikiri
 export type JobFilter =
   | 'Semua'
   | 'Belum Bayar'
+  | 'DP'
   | 'Lunas'
   | 'Sedang Edit'
   | 'Deadline ≤ 3 Hari'

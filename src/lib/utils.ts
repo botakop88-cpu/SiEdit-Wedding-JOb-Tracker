@@ -57,6 +57,23 @@ export function validateWhatsApp(value: string): boolean {
   return digits.length >= 10 && digits.length <= 15
 }
 
+// ─── HTML escaping (untuk konten user yang dirender ke dokumen cetak) ─
+
+export function escapeHtml(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+// Escape lalu terjemahkan `**teks**` menjadi <strong> untuk konten cetak.
+// Diproses SETELAH escape, jadi tetap aman dari XSS.
+export function escapeHtmlBold(value: string | null | undefined): string {
+  return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+}
+
 // ─── Today as YYYY-MM-DD ────────────────────────────────────────
 
 export function todayStr(): string {

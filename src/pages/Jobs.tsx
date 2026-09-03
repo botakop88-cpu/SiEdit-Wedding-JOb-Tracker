@@ -1,13 +1,16 @@
 import { useEffect, useState, useMemo, useRef, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Search, ChevronDown, ChevronUp, MoreVertical, Calendar, Folder, Pencil, Trash2, X, CheckCircle2, Wallet, CreditCard } from 'lucide-react'
+import { Plus, Search, ChevronDown, ChevronUp, MoreVertical, Calendar, Folder, Pencil, Trash2, X, CheckCircle2, Printer } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
+import { useAuth } from '../lib/AuthContext'
 import { useToast } from '../lib/ToastContext'
-import type { Job, Vendor, VendorPriceItem, StatusEdit, StatusBayar, StatusCetak } from '../lib/types'
-import { STATUS_EDIT_OPTIONS, STATUS_BAYAR_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
-import { rupiah, formatDate, daysUntil, todayStr } from '../lib/utils'
+import type { Job, Vendor, VendorPriceItem, StatusEdit, StatusCetak } from '../lib/types'
+import { STATUS_EDIT_OPTIONS, STATUS_CETAK_OPTIONS } from '../lib/types'
+import { rupiah, formatDate, daysUntil } from '../lib/utils'
 import StatusDropdown from '../components/StatusDropdown'
+import { sisaTagihan } from '../lib/payments'
 import type { StatusValue } from '../lib/statusHelpers'
+import { getStatusBadgeClass } from '../lib/statusHelpers'
 
 const ENABLE_QUICK_STATUS = true
 
@@ -18,7 +21,6 @@ const EMPTY_FORM = {
   harga: 0,
   deadline: '',
   status_edit: 'Masuk' as StatusEdit,
-  status_bayar: 'Belum Bayar' as StatusBayar,
   status_cetak: 'Belum Cetak' as StatusCetak,
   catatan: '',
 }
@@ -35,7 +37,8 @@ interface VendorWithPrices extends Vendor {
 }
 
 export default function Jobs() {
-  const { toast } = useToast()
+  const { user } = useAuth()
+  const { toast, confirm } = useToast()
   const [searchParams] = useSearchParams()
   const [jobs, setJobs] = useState<Job[]>([])
   const [vendors, setVendors] = useState<VendorWithPrices[]>([])
@@ -58,9 +61,9 @@ export default function Jobs() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(100)
   const searchRef = useRef<HTMLInputElement>(null)
-  const prevStatusRef = useRef<Record<string, { status_edit: StatusEdit; status_bayar: StatusBayar; status_cetak: StatusCetak; tanggal_lunas: string | null }>>({})
+  const prevStatusRef = useRef<Record<string, { status_edit: StatusEdit; status_cetak: StatusCetak }>>({})
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { if (user) loadData() }, [user?.id])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -75,6 +78,7 @@ export default function Jobs() {
 
   async function loadData() {
     setLoading(true)
+    try {
     const [jRes, vRes, piRes] = await Promise.all([
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('vendor_id').order('deadline'),
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
@@ -89,7 +93,11 @@ export default function Jobs() {
       }
       setVendors((vRes.data as Vendor[]).map((v) => ({ ...v, price_items: priceByVendor.get(v.id) ?? [] })))
     }
-    setLoading(false)
+    } catch {
+      // error handled silently — data stays stale
+    } finally {
+      setLoading(false)
+    }
   }
 
   const filtered = useMemo(() => {
@@ -102,7 +110,9 @@ export default function Jobs() {
     if (filterVendor !== 'Semua Vendor') result = result.filter((j) => j.vendor?.nama === filterVendor)
     if (filterJenis !== 'Semua Jenis') result = result.filter((j) => j.jenis_edit === filterJenis)
     if (filterDeadline) result = result.filter((j) => j.deadline === filterDeadline)
-    if (quickFilter === 'Belum Bayar') result = result.filter((j) => j.status_bayar === 'Belum Bayar')
+    if (quickFilter === 'Masuk') result = result.filter((j) => j.status_edit === 'Masuk')
+    else if (quickFilter === 'Belum Bayar') result = result.filter((j) => j.status_bayar === 'Belum Bayar')
+    else if (quickFilter === 'DP') result = result.filter((j) => j.status_bayar === 'DP')
     else if (quickFilter === 'Lunas') result = result.filter((j) => j.status_bayar === 'Lunas')
     else if (quickFilter === 'Deadline ≤ 3 Hari') {
       result = result.filter((j) => {
@@ -124,9 +134,10 @@ export default function Jobs() {
       const eb = editOrder[b.status_edit] ?? 9
       if (ea !== eb) return ea - eb
 
-      if (a.status_bayar !== b.status_bayar) {
-        return a.status_bayar === 'Belum Bayar' ? -1 : 1
-      }
+      const bayarOrder: Record<string, number> = { 'Belum Bayar': 0, 'DP': 1, 'Lunas': 2 }
+      const ba = bayarOrder[a.status_bayar] ?? 9
+      const bb = bayarOrder[b.status_bayar] ?? 9
+      if (ba !== bb) return ba - bb
 
       if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline)
       if (a.deadline) return -1
@@ -202,7 +213,6 @@ export default function Jobs() {
       harga: j.harga,
       deadline: j.deadline ?? '',
       status_edit: j.status_edit,
-      status_bayar: j.status_bayar,
       status_cetak: j.status_cetak,
       catatan: j.catatan ?? '',
     })
@@ -226,6 +236,13 @@ export default function Jobs() {
   }
 
   async function deleteJob(j: Job) {
+    const ok = await confirm({
+      title: 'Hapus job ini?',
+      message: `"${j.nama_project}" akan dipindahkan ke Recycle Bin.`,
+      confirmLabel: 'Hapus',
+      danger: true,
+    })
+    if (!ok) return
     setMenuFor(null)
     const { error } = await supabase.from('job').update({ deleted_at: new Date().toISOString() }).eq('id', j.id)
     if (error) {
@@ -236,31 +253,15 @@ export default function Jobs() {
     loadData()
   }
 
-  async function updateJobStatus(jobId: string, field: 'status_edit' | 'status_bayar' | 'status_cetak', newValue: StatusValue) {
+  async function updateJobStatus(jobId: string, field: 'status_edit' | 'status_cetak', newValue: StatusValue) {
     const j = jobs.find((x) => x.id === jobId)
     if (!j) return
     if (j[field] === newValue) return
 
-    const prev = {
-      status_edit: j.status_edit,
-      status_bayar: j.status_bayar,
-      status_cetak: j.status_cetak,
-      tanggal_lunas: j.tanggal_lunas,
-    }
-
+    const prev = { status_edit: j.status_edit, status_cetak: j.status_cetak }
     const patch: Record<string, unknown> = { [field]: newValue, updated_at: new Date().toISOString() }
-    // Jaga konsistensi tanggal_lunas dengan Invoices: Lunas -> isi tanggal lunas hari ini,
-    // bukan Lunas -> kosongkan. Kalau tidak, job yang ditandai Lunas lewat dropdown cepat
-    // hilang dari pendapatan Dashboard/Reports (yang hitung via tanggal_lunas).
-    const nextTanggalLunas: string | null =
-      field === 'status_bayar' ? (newValue === 'Lunas' ? todayStr() : null) : j.tanggal_lunas
-    if (field === 'status_bayar') {
-      patch.tanggal_lunas = nextTanggalLunas
-    }
 
-    setJobs((list) =>
-      list.map((x) => (x.id === jobId ? { ...x, tanggal_lunas: nextTanggalLunas, [field]: newValue } : x)),
-    )
+    setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: newValue } : x)))
 
     const { error } = await supabase
       .from('job')
@@ -268,12 +269,12 @@ export default function Jobs() {
       .eq('id', jobId)
 
     if (error) {
-      setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: prev[field], tanggal_lunas: prev.tanggal_lunas } : x)))
+      setJobs((list) => list.map((x) => (x.id === jobId ? { ...x, [field]: prev[field] } : x)))
       toast({ type: 'error', title: 'Gagal mengubah status', message: error.message })
       return
     }
 
-    const label = field === 'status_edit' ? 'Status Edit' : field === 'status_bayar' ? 'Bayar' : 'Cetak'
+    const label = field === 'status_edit' ? 'Status Edit' : 'Cetak'
     toast({
       type: 'success',
       title: `${label}: ${newValue}`,
@@ -306,9 +307,8 @@ export default function Jobs() {
   async function bulkMarkDone() {
     if (selected.size === 0) return
     const ids = Array.from(selected)
-    // Definisi "beres total" harus konsisten dengan urutan job (sort) dan tampilan:
-    // Selesai && Sudah Cetak. Ini mencegah job yang baru "Selesai" tapi belum dicetak
-    // (alur kerja sah) ikut ter-undo secara tak terduga saat tombol Job Beres ditekan.
+    // Definisi "beres total" harus konsisten dengan urutan job (sort) dan tampilan.
+    // Catatan: pembayaran TIDAK dicatat di sini — pelunasan job mengikuti alur invoice.
     const targetJobs = jobs.filter((j) => ids.includes(j.id))
     const allDone = targetJobs.length > 0 && targetJobs.every((j) => j.status_edit === 'Selesai' && j.status_cetak === 'Sudah Cetak')
 
@@ -321,13 +321,7 @@ export default function Jobs() {
       for (const j of restorable) {
         const prev = prevStatusRef.current[j.id]
         const { error } = await supabase.from('job')
-          .update({
-            status_edit: prev.status_edit,
-            status_bayar: prev.status_bayar,
-            status_cetak: prev.status_cetak,
-            // Kembalikan tanggal lunas ASLI dari riwayat, bukan di-reset ke hari ini.
-            tanggal_lunas: prev.tanggal_lunas ?? null,
-          })
+          .update({ status_edit: prev.status_edit, status_cetak: prev.status_cetak, updated_at: new Date().toISOString() })
           .eq('id', j.id)
         if (error) {
           toast({ type: 'error', title: 'Gagal mengembalikan', message: error.message })
@@ -348,58 +342,66 @@ export default function Jobs() {
       }
     } else {
       for (const j of targetJobs) {
-        prevStatusRef.current[j.id] = {
-          status_edit: j.status_edit,
-          status_bayar: j.status_bayar,
-          status_cetak: j.status_cetak,
-          tanggal_lunas: j.tanggal_lunas,
-        }
+        prevStatusRef.current[j.id] = { status_edit: j.status_edit, status_cetak: j.status_cetak }
         const { error } = await supabase.from('job')
-          .update({
-            status_edit: 'Selesai',
-            status_bayar: 'Lunas',
-            status_cetak: 'Sudah Cetak',
-            tanggal_lunas: todayStr(),
-          })
+          .update({ status_edit: 'Selesai', status_cetak: 'Sudah Cetak', updated_at: new Date().toISOString() })
           .eq('id', j.id)
         if (error) {
           toast({ type: 'error', title: 'Gagal memperbarui', message: error.message })
+          loadData()
           return
         }
       }
-      toast({ type: 'success', title: `${ids.length} job ditandai Selesai & Lunas` })
+      toast({ type: 'success', title: `${ids.length} job ditandai Selesai` })
     }
 
     setSelected(new Set())
     loadData()
   }
 
-  async function bulkMarkLunas() {
+  async function bulkMarkCetak() {
     if (selected.size === 0) return
     const ids = Array.from(selected)
-    const { error } = await supabase.from('job')
-      .update({ status_bayar: 'Lunas', tanggal_lunas: todayStr() })
-      .in('id', ids)
-    if (error) {
-      toast({ type: 'error', title: 'Gagal memperbarui', message: error.message })
-      return
-    }
-    toast({ type: 'success', title: `${ids.length} job ditandai Lunas` })
-    setSelected(new Set())
-    loadData()
-  }
+    const targetJobs = jobs.filter((j) => ids.includes(j.id))
+    const allCetak = targetJobs.length > 0 && targetJobs.every((j) => j.status_cetak === 'Sudah Cetak')
 
-  async function bulkMarkBelumLunas() {
-    if (selected.size === 0) return
-    const ids = Array.from(selected)
-    const { error } = await supabase.from('job')
-      .update({ status_bayar: 'Belum Bayar', tanggal_lunas: null })
-      .in('id', ids)
-    if (error) {
-      toast({ type: 'error', title: 'Gagal memperbarui', message: error.message })
-      return
+    if (allCetak) {
+      const restorable = targetJobs.filter((j) => prevStatusRef.current[j.id])
+      const skipped = targetJobs.length - restorable.length
+
+      for (const j of restorable) {
+        const prev = prevStatusRef.current[j.id]
+        const { error } = await supabase.from('job')
+          .update({ status_cetak: prev.status_cetak, updated_at: new Date().toISOString() })
+          .eq('id', j.id)
+        if (error) {
+          toast({ type: 'error', title: 'Gagal mengembalikan', message: error.message })
+          return
+        }
+        delete prevStatusRef.current[j.id]
+      }
+
+      if (restorable.length > 0) {
+        toast({ type: 'success', title: `${restorable.length} job dikembalikan ke status cetak sebelumnya` })
+      }
+      if (skipped > 0) {
+        toast({ type: 'info', title: `${skipped} job dilewati`, message: 'Riwayat status cetak sebelumnya tidak ditemukan.' })
+      }
+    } else {
+      for (const j of targetJobs) {
+        prevStatusRef.current[j.id] = { status_edit: j.status_edit, status_cetak: j.status_cetak }
+        const { error } = await supabase.from('job')
+          .update({ status_cetak: 'Sudah Cetak', updated_at: new Date().toISOString() })
+          .eq('id', j.id)
+        if (error) {
+          toast({ type: 'error', title: 'Gagal memperbarui', message: error.message })
+          loadData()
+          return
+        }
+      }
+      toast({ type: 'success', title: `${ids.length} job ditandai Sudah Cetak` })
     }
-    toast({ type: 'success', title: `${ids.length} job ditandai Belum Lunas` })
+
     setSelected(new Set())
     loadData()
   }
@@ -407,6 +409,13 @@ export default function Jobs() {
   async function bulkDelete() {
     if (selected.size === 0) return
     const ids = Array.from(selected)
+    const ok = await confirm({
+      title: `Hapus ${ids.length} job?`,
+      message: `${ids.length} job akan dipindahkan ke Recycle Bin.`,
+      confirmLabel: 'Hapus',
+      danger: true,
+    })
+    if (!ok) return
     const { error } = await supabase.from('job').update({ deleted_at: new Date().toISOString() }).in('id', ids)
     if (error) {
       toast({ type: 'error', title: 'Gagal menghapus', message: error.message })
@@ -437,14 +446,13 @@ export default function Jobs() {
       toast({ type: 'error', title: 'Vendor dan nama project wajib diisi' })
       return
     }
-    setSaving(true)
-    const payload: Record<string, unknown> = { ...form, user_id: (await supabase.auth.getUser()).data.user?.id }
-    // Jaga konsistensi tanggal_lunas saat status_bayar diubah lewat form edit:
-    // Lunas -> isi tanggal lunas, bukan Lunas -> kosongkan. (tidak menyentuh saat tambah
-    // job baru yang selalu Belum Bayar).
-    if (editing && form.status_bayar !== editing.status_bayar) {
-      payload.tanggal_lunas = form.status_bayar === 'Lunas' ? todayStr() : null
+    if (form.harga <= 0) {
+      toast({ type: 'error', title: 'Harga harus lebih dari 0' })
+      return
     }
+    setSaving(true)
+    const payload: Record<string, unknown> = { ...form, deadline: form.deadline || null, user_id: (await supabase.auth.getUser()).data.user?.id }
+    if (editing) payload.updated_at = new Date().toISOString()
     const { error } = editing
       ? await supabase.from('job').update(payload).eq('id', editing.id)
       : await supabase.from('job').insert([payload])
@@ -488,7 +496,7 @@ export default function Jobs() {
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
               className="flex-1 text-sm bg-transparent outline-none text-slate-900 placeholder:text-slate-400"
             />
-            <kbd className="text-xs text-slate-400 border border-slate-200 rounded px-1.5 py-0.5">Ctrl + K</kbd>
+
           </div>
           <select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1) }} className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
             <option>Semua Status</option>
@@ -548,20 +556,22 @@ export default function Jobs() {
 
         {/* Quick filters */}
         <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-slate-100">
-          {['Semua', 'Belum Bayar', 'Lunas', 'Deadline ≤ 3 Hari', 'Sudah Cetak', 'Belum Cetak'].map((f) => (
+          {['Semua', 'Masuk', 'Belum Bayar', 'DP', 'Lunas', 'Deadline ≤ 3 Hari', 'Sudah Cetak', 'Belum Cetak'].map((f) => (
             <button
               key={f}
               onClick={() => { setQuickFilter(f); setPage(1) }}
               className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                 quickFilter === f
                   ? 'bg-rose-500 text-white'
-                  : f === 'Belum Bayar'
-                    ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                    : f === 'Lunas'
-                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                      : f === 'Deadline ≤ 3 Hari'
-                        ? 'bg-red-50 text-red-700 hover:bg-red-100'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  : f === 'Masuk'
+                    ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                    : f === 'Belum Bayar'
+                      ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                      : f === 'Lunas'
+                        ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                        : f === 'Deadline ≤ 3 Hari'
+                          ? 'bg-red-50 text-red-700 hover:bg-red-100'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
               {f}
@@ -578,8 +588,8 @@ export default function Jobs() {
           const selesai = vendorJobs.filter((j) => j.status_edit === 'Selesai').length
           const belumSelesai = totalJobs - selesai
           const pct = totalJobs > 0 ? (selesai / totalJobs) * 100 : 0
-          const outstanding = vendorJobs.filter((j) => j.status_bayar === 'Belum Bayar').reduce((sum, j) => sum + j.harga, 0)
-          const countBelumBayar = vendorJobs.filter((j) => j.status_bayar === 'Belum Bayar').length
+          const outstanding = vendorJobs.reduce((sum, j) => sum + sisaTagihan(j.harga, j.total_dibayar), 0)
+          const countBelumBayar = vendorJobs.filter((j) => j.status_bayar !== 'Lunas').length
 
           return (
             <div key={vendor} className="card overflow-hidden">
@@ -705,20 +715,10 @@ export default function Jobs() {
                               )}
                             </td>
                             <td className="py-3 px-4">
-                              {ENABLE_QUICK_STATUS ? (
-                                <StatusDropdown
-                                  jobId={j.id}
-                                  currentValue={j.status_bayar}
-                                  statusType="bayar"
-                                  onUpdate={(id, val) => updateJobStatus(id, 'status_bayar', val)}
-                                />
-                              ) : (
-                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                  j.status_bayar === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                                }`}>
-                                  {j.status_bayar}
-                                </span>
-                              )}
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${getStatusBadgeClass('bayar', j.status_bayar)}`}>
+                                {j.status_bayar}
+                                {j.status_bayar === 'DP' && <span className="font-normal opacity-70">· {rupiah(sisaTagihan(j.harga, j.total_dibayar))}</span>}
+                              </span>
                             </td>
                             <td className="py-3 px-4">
                               {ENABLE_QUICK_STATUS ? (
@@ -831,10 +831,9 @@ export default function Jobs() {
                           }`}>
                             {j.status_edit}
                           </span>
-                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
-                            j.status_bayar === 'Lunas' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                          }`}>
+                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${getStatusBadgeClass('bayar', j.status_bayar)}`}>
                             {j.status_bayar}
+                            {j.status_bayar === 'DP' && <span className="font-normal opacity-70">· {rupiah(sisaTagihan(j.harga, j.total_dibayar))}</span>}
                           </span>
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${
                             j.status_cetak === 'Sudah Cetak' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
@@ -866,11 +865,8 @@ export default function Jobs() {
           <button onClick={bulkMarkDone} className="btn-primary !py-1.5 !px-3 text-xs">
             <CheckCircle2 className="w-4 h-4" /> Job Beres
           </button>
-          <button onClick={bulkMarkLunas} className="inline-flex items-center gap-1 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors">
-            <Wallet className="w-4 h-4" /> Lunas
-          </button>
-          <button onClick={bulkMarkBelumLunas} className="inline-flex items-center gap-1 border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors">
-            <CreditCard className="w-4 h-4" /> Belum Lunas
+          <button onClick={bulkMarkCetak} className="inline-flex items-center gap-1 border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors">
+            <Printer className="w-4 h-4" /> Sudah Cetak
           </button>
           <button onClick={bulkDelete} className="inline-flex items-center gap-1 border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors">
             <Trash2 className="w-4 h-4" /> Hapus
@@ -996,17 +992,11 @@ export default function Jobs() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Deadline</label>
                 <input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className="input-base" />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Status Edit</label>
                   <select value={form.status_edit} onChange={(e) => setForm({ ...form, status_edit: e.target.value as StatusEdit })} className="input-base">
                     {STATUS_EDIT_OPTIONS.map((s) => <option key={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Bayar</label>
-                  <select value={form.status_bayar} onChange={(e) => setForm({ ...form, status_bayar: e.target.value as StatusBayar })} className="input-base">
-                    {STATUS_BAYAR_OPTIONS.map((s) => <option key={s}>{s}</option>)}
                   </select>
                 </div>
                 <div>
@@ -1016,6 +1006,19 @@ export default function Jobs() {
                   </select>
                 </div>
               </div>
+              {editing && (
+                <p className="text-xs text-slate-500 -mt-1">
+                  Status bayar: <strong>{editing.status_bayar}</strong>
+                  {editing.status_bayar === 'DP' && ` (sisa ${rupiah(sisaTagihan(editing.harga, editing.total_dibayar))})`}
+                  . Pembayaran dikelola lewat halaman Invoice.
+                </p>
+              )}
+              {editing && editing.total_dibayar > 0 && form.harga !== editing.harga && (
+                <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 -mt-1">
+                  Job ini sudah ada pembayaran tercatat ({rupiah(editing.total_dibayar)}). Mengubah harga akan
+                  otomatis menghitung ulang status bayar & sisa tagihan berdasarkan harga baru ini.
+                </p>
+              )}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Catatan</label>
                 <textarea value={form.catatan} onChange={(e) => setForm({ ...form, catatan: e.target.value })} rows={2} className="input-base resize-none" />

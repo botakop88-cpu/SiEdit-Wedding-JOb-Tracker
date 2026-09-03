@@ -10,6 +10,15 @@ interface VendorStats extends Vendor {
   price_items?: VendorPriceItem[]
 }
 
+type VendorJob = {
+  id: string
+  vendor_id: string | null
+  harga: number
+  total_dibayar: number | null
+  status_edit: string
+  status_bayar: string
+}
+
 const EMPTY_FORM = {
   nama: '',
   whatsapp: '',
@@ -23,7 +32,7 @@ export default function Vendors() {
   const { user } = useAuth()
   const { toast, confirm } = useToast()
   const [vendors, setVendors] = useState<VendorStats[]>([])
-  const [jobs, setJobs] = useState<any[]>([])
+  const [jobs, setJobs] = useState<VendorJob[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('Semua Status')
@@ -37,7 +46,7 @@ export default function Vendors() {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { if (user) loadData() }, [user?.id])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -52,9 +61,10 @@ export default function Vendors() {
 
   async function loadData() {
     setLoading(true)
+    try {
     const [vRes, jRes, piRes] = await Promise.all([
       supabase.from('vendor').select('*').is('deleted_at', null).order('nama'),
-      supabase.from('job').select('id, vendor_id, harga, status_edit, status_bayar').is('deleted_at', null),
+      supabase.from('job').select('id, vendor_id, harga, total_dibayar, status_edit, status_bayar').is('deleted_at', null),
       supabase.from('vendor_price_item').select('*').order('urutan'),
     ])
     if (vRes.data) {
@@ -65,8 +75,12 @@ export default function Vendors() {
       }
       setVendors((vRes.data as Vendor[]).map((v) => ({ ...v, price_items: priceByVendor.get(v.id) ?? [] })))
     }
-    if (jRes.data) setJobs(jRes.data)
-    setLoading(false)
+    if (jRes.data) setJobs(jRes.data as VendorJob[])
+    } catch {
+      // error handled silently — data stays stale
+    } finally {
+      setLoading(false)
+    }
   }
 
   const vendorStats = useMemo(() => {
@@ -79,8 +93,8 @@ export default function Vendors() {
       const stats = map.get(j.vendor_id)
       if (!stats) continue
       stats.jobCount++
-      if (j.status_bayar === 'Lunas') stats.pendapatan += j.harga
-      else stats.outstanding += j.harga
+      stats.pendapatan += j.total_dibayar ?? 0
+      stats.outstanding += Math.max(0, j.harga - (j.total_dibayar ?? 0))
       if (j.status_edit === 'Selesai') stats.selesai++
     }
     return map
@@ -205,7 +219,7 @@ export default function Vendors() {
     }
 
     let vendorId: string | null = editing?.id ?? null
-    let error: any
+    let error: { message: string } | null = null
 
     if (editing) {
       ;({ error } = await supabase.from('vendor').update(payload).eq('id', editing.id))
@@ -224,8 +238,8 @@ export default function Vendors() {
     if (vendorId) {
       try {
         await syncPriceItems(vendorId, validItems)
-      } catch (syncErr: any) {
-        toast({ type: 'error', title: 'Gagal menyimpan daftar produk', message: syncErr?.message })
+      } catch (syncErr) {
+        toast({ type: 'error', title: 'Gagal menyimpan daftar produk', message: (syncErr as Error)?.message })
         setSaving(false)
         return
       }
@@ -297,7 +311,7 @@ export default function Vendors() {
               onChange={(e) => setSearch(e.target.value)}
               className="flex-1 text-sm bg-transparent outline-none text-slate-900 placeholder:text-slate-400"
             />
-            <kbd className="text-xs text-slate-400 border border-slate-200 rounded px-1.5 py-0.5">Ctrl + K</kbd>
+
           </div>
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
             <option>Semua Status</option>

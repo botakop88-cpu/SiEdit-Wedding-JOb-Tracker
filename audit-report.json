@@ -1,0 +1,107 @@
+[
+  {
+    "section": "LOGIN",
+    "status": "PASS",
+    "detail": "Login form rendered"
+  },
+  {
+    "section": "LOGIN",
+    "status": "PASS",
+    "detail": "Logged in successfully → http://localhost:5173/dashboard"
+  },
+  {
+    "section": "DASHBOARD",
+    "status": "PASS",
+    "detail": "Greeting: true"
+  },
+  {
+    "section": "DASHBOARD",
+    "status": "PASS",
+    "detail": "Total Job: true"
+  },
+  {
+    "section": "DASHBOARD",
+    "status": "PASS",
+    "detail": "Deadline section: true"
+  },
+  {
+    "section": "DASHBOARD",
+    "status": "PASS",
+    "detail": "Status Job: true"
+  },
+  {
+    "section": "DASHBOARD",
+    "status": "PASS",
+    "detail": "Top Vendor: true"
+  },
+  {
+    "section": "DASHBOARD",
+    "status": "PASS",
+    "detail": "Aktivitas: true"
+  },
+  {
+    "section": "JOBS",
+    "status": "PASS",
+    "detail": "Job data: true"
+  },
+  {
+    "section": "JOBS",
+    "status": "PASS",
+    "detail": "Filter buttons: 8"
+  },
+  {
+    "section": "VENDORS",
+    "status": "PASS",
+    "detail": "Vendor data: true"
+  },
+  {
+    "section": "VENDORS",
+    "status": "PASS",
+    "detail": "No Ctrl+K: true"
+  },
+  {
+    "section": "INVOICES",
+    "status": "PASS",
+    "detail": "Invoice data: true"
+  },
+  {
+    "section": "INVOICES",
+    "status": "PASS",
+    "detail": "No error message: true"
+  },
+  {
+    "section": "SETTINGS",
+    "status": "PASS",
+    "detail": "Telegram section: true"
+  },
+  {
+    "section": "SETTINGS",
+    "status": "PASS",
+    "detail": "Logo upload: true"
+  },
+  {
+    "section": "SETTINGS",
+    "status": "PASS",
+    "detail": "Backup section: true"
+  },
+  {
+    "section": "NOTIFICATIONS",
+    "status": "PASS",
+    "detail": "Notifications page: true"
+  },
+  {
+    "section": "REPORTS",
+    "status": "PASS",
+    "detail": "Total Job: true"
+  },
+  {
+    "section": "REPORTS",
+    "status": "PASS",
+    "detail": "Pendapatan: true"
+  },
+  {
+    "section": "REPORTS",
+    "status": "PASS",
+    "detail": "Charts rendered: true"
+  }
+]
