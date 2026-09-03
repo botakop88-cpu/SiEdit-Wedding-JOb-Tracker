@@ -5,7 +5,7 @@ import { useAuth } from '../lib/AuthContext'
 import { useToast } from '../lib/ToastContext'
 import type { Vendor, Job, Invoice, InvoiceItem, UserSettings } from '../lib/types'
 import { rupiah, formatDate, todayStr, escapeHtml, escapeHtmlBold } from '../lib/utils'
-import { recordInvoicePayment, reverseInvoicePayments, sisaTagihan } from '../lib/payments'
+import { recordInvoicePayment, sisaTagihan } from '../lib/payments'
 import InvoicePaymentModal from '../components/InvoicePaymentModal'
 
 export default function Invoices() {
@@ -168,14 +168,13 @@ export default function Invoices() {
   const totalLunas = summary.totalLunas
   const totalPiutang = summary.totalPiutang
 
-  // Nomor invoice dihitung dari nomor terbesar yang SUDAH TERSIMPAN (bukan COUNT),
-  // sehingga tidak bentrok setelah ada invoice di-soft-delete. Nomornya ditulis ke
-  // kolom `nomor` (unique index idx_invoice_nomor_user) supaya anti-duplikat.
+  // Nomor invoice dihitung dari nomor terbesar di SELURUH invoice (termasuk soft-deleted),
+  // supaya nomor tidak bentrok dengan invoice yang sudah dihapus.
+  // Unique index idx_invoice_nomor_user berlaku untuk semua row WHERE nomor IS NOT NULL.
   async function nextInvoiceNumber(): Promise<string> {
     const { data } = await supabase
       .from('invoice')
       .select('nomor')
-      .is('deleted_at', null)
     const rows = (data ?? []) as Pick<Invoice, 'nomor'>[]
     let max = 0
     for (const r of rows) {
@@ -298,27 +297,15 @@ export default function Invoices() {
   }
 
   async function toggleStatus(inv: Invoice) {
-    // Invoice DP: klik badge membuka modal pembayaran (biar tidak ambigu) —
-    // bukan toggle satu klik seperti Belum Bayar/Lunas.
-    if (inv.status_bayar === 'DP') {
+    // Invoice DP / Lunas: klik badge membuka modal riwayat pembayaran.
+    if (inv.status_bayar === 'DP' || inv.status_bayar === 'Lunas') {
       setPayModalInvoice(inv)
       return
     }
-    const newStatus = inv.status_bayar === 'Lunas' ? 'Belum Bayar' : 'Lunas'
-
+    // Belum Bayar → Lunas: pelunasan penuh satu klik.
     try {
-      if (newStatus === 'Lunas') {
-        // Pelunasan penuh satu klik: catat sebagai SATU pembayaran invoice yang
-        // otomatis dibagikan ke job-job di dalamnya (record_invoice_payment).
-        await recordInvoicePayment(inv.id, inv.total, todayStr(), `Pelunasan via invoice ${inv.nomor ?? ''}`.trim())
-        toast({ type: 'success', title: 'Invoice ditandai Lunas' })
-      } else {
-        // Batalkan: hapus semua pembayaran (job_payment + invoice_payment) yang
-        // tercatat berasal dari invoice ini, lalu kembalikan status invoice.
-        await reverseInvoicePayments(inv.id)
-        await supabase.from('invoice').update({ status_bayar: 'Belum Bayar' }).eq('id', inv.id)
-        toast({ type: 'success', title: 'Invoice ditandai Belum Bayar' })
-      }
+      await recordInvoicePayment(inv.id, inv.total, todayStr(), `Pelunasan via invoice ${inv.nomor ?? ''}`.trim())
+      toast({ type: 'success', title: 'Invoice ditandai Lunas' })
     } catch (err) {
       toast({ type: 'error', title: 'Gagal update status', message: (err as Error).message })
     }
