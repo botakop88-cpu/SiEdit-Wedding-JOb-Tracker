@@ -82,14 +82,14 @@ export default function Dashboard() {
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).neq('status_bayar', 'Lunas'),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).not('deadline', 'is', null).lte('deadline', today)
-        .not('status_edit', 'in', '("Selesai")'),
+        .or('status_edit.neq.Selesai,status_cetak.neq.Sudah Cetak'),
       // Basis grafik pendapatan: job_payment (mencakup DP/cicilan), bukan cuma job Lunas
       // penuh — supaya DP yang diterima bulan ini ikut terhitung sebagai pendapatan
       // bulan ini walau job-nya baru lunas penuh di bulan lain (atau belum lunas sama sekali).
       supabase.from('job_payment').select('jumlah, tanggal').gte('tanggal', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
         .not('deadline', 'is', null).lte('deadline', maxDeadline)
-        .not('status_edit', 'in', '("Selesai")').order('deadline').limit(15),
+        .or('status_edit.neq.Selesai,status_cetak.neq.Sudah Cetak').order('deadline').limit(15),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('created_at', { ascending: false }).limit(5),
       supabase.from('job').select('status_edit').is('deleted_at', null),
       supabase.from('job').select('created_at, status_edit, tanggal_lunas').is('deleted_at', null),
@@ -314,27 +314,17 @@ export default function Dashboard() {
           {deadlineJobs.length === 0 ? (
             <p className="text-sm text-slate-400 py-8 text-center">Tidak ada deadline 🎉</p>
           ) : (
-            <div className="space-y-1">
-              {deadlineJobs.map((j, idx) => {
+            <div className="space-y-0.5">
+              {deadlineJobs.map((j) => {
                 const dl = deadlineLabel(j.deadline, j.status_cetak)
                 return (
-                <div key={j.id} className="flex items-start gap-3">
-                  <div className="flex flex-col items-center shrink-0 w-16">
-                    <span className="text-[10px] font-bold text-slate-900 leading-tight text-center">{formatDate(j.deadline)}</span>
-                    <div className={`w-2 h-2 rounded-full mt-1 ${dl.label === 'Terlambat' || dl.label === 'Hari Ini' ? 'bg-red-500' : dl.label === 'Besok' ? 'bg-orange-500' : 'bg-rose-500'}`} />
-                    {idx < deadlineJobs.length - 1 && <div className="w-0.5 h-14 bg-slate-200 mt-1" />}
+                <div key={j.id} className="flex items-center gap-2 py-1.5">
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${dl.label === 'Terlambat' || dl.label === 'Hari Ini' ? 'bg-red-500' : dl.label === 'Besok' ? 'bg-orange-500' : 'bg-rose-400'}`} />
+                  <span className="text-xs text-slate-500 shrink-0 w-20">{formatDate(j.deadline)}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800 truncate">{j.nama_project}</p>
                   </div>
-                  <div className="flex-1 min-w-0 pt-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-slate-900 text-sm">{j.nama_project}</p>
-                      {dl.label && <span className={`text-[10px] font-semibold ${dl.color}`}>{dl.label}</span>}
-                    </div>
-                    <p className="text-xs text-slate-500">Pernikahan {j.vendor?.nama ?? '-'}</p>
-                    <span className="inline-block mt-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700">
-                      {j.jenis_edit}
-                    </span>
-                  </div>
-                  <button className="text-slate-400 hover:text-slate-600 shrink-0">→</button>
+                  {dl.label && <span className={`text-[10px] font-semibold shrink-0 ${dl.color}`}>{dl.label}</span>}
                 </div>
                 )
               })}
