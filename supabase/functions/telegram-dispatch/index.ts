@@ -7,14 +7,9 @@ async function getSecret(
   supabase: ReturnType<typeof createClient>,
   name: string,
 ): Promise<string | null> {
-  const { data, error } = await supabase
-    .schema('vault')
-    .from('decrypted_secrets')
-    .select('decrypted_secret')
-    .eq('name', name)
-    .maybeSingle()
+  const { data, error } = await supabase.rpc('siedit_get_secret', { p_name: name })
   if (error || !data) return null
-  return data.decrypted_secret as string
+  return data as string
 }
 
 function addDays(dateStr: string, days: number): string {

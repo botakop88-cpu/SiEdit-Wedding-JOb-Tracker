@@ -89,16 +89,9 @@ async function getSecret(
   supabase: ReturnType<typeof createClient>,
   name: string,
 ): Promise<string | null> {
-  // Baca langsung dari vault (pola sama seperti telegram-dispatch). Service role
-  // melewati RLS, jadi `siedit_get_secret` (wrapper SQL) tidak wajib ada.
-  const { data, error } = await supabase
-    .schema('vault')
-    .from('decrypted_secrets')
-    .select('decrypted_secret')
-    .eq('name', name)
-    .maybeSingle()
+  const { data, error } = await supabase.rpc('siedit_get_secret', { p_name: name })
   if (error || !data) return null
-  return data.decrypted_secret as string
+  return data as string
 }
 
 async function sendMessage(token: string, chatId: number, text: string) {
