@@ -1,7 +1,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const TELEGRAM_API = 'https://api.telegram.org'
-const SEP = '━━━━━━━━━━━━━━━━'
+const SEP = '——————————————'
 const BULAN_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
 const BULAN_ID_FULL = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
 const BULAN_CARI: Record<string, number> = (() => {
@@ -33,7 +33,7 @@ type WizardData = {
   invoice_jobs?: { id: string; nama_project: string; sisa: number; jenis_edit: string }[]
   invoice_selected?: number[]
   invoice_confirm?: { vendor_nama: string; total: number; items: string[] }
-  invoice_list?: { id: string; nomor: string; vendor_nama: string; total: number; sisa: number; status_bayar: string }[]
+  invoice_list?: { id: string; nomor: string; vendor_nama: string; total: number; sisa: number; status_bayar: string; tanggal: string }[]
   invoice_pick?: number
   bayar_jumlah?: number
   bayar_tanggal?: string
@@ -112,24 +112,22 @@ async function getUserByChat(supabase: ReturnType<typeof createClient>, chatId: 
 }
 
 const NOT_CONNECTED_TEXT =
-  '🔗 Kamu belum terhubung. Buka Pengaturan di\n' +
-  'web SiEdit, klik "Hubungkan Telegram", lalu\n' +
-  'kirim kode yang tampil.'
+  '🔗 Kamu belum terhubung.\n' +
+  'Buka Pengaturan → Hubungkan Telegram\n' +
+  'lalu kirim kode yang tampil.'
 
 const HELP_TEXT =
-  '📋 PERINTAH SiEdit BOT\n' +
+  '📋 PERINTAH SiEdit\n' +
   `${SEP}\n` +
-  '/tambah — Tambah job baru\n' +
-  '/buatinvoice — Buat invoice dari job\n' +
-  '/cekinvoice — Lihat & kelola invoice\n' +
-  '/belumbayar — Daftar job belum bayar\n' +
-  '/deadline — Job mendekati deadline\n' +
-  '/batal — Batalkan proses berjalan\n' +
-  '/help — Bantuan ini\n' +
+  '➕ /tambah         Tambah job baru\n' +
+  '🧾 /buatinvoice    Buat invoice dari job\n' +
+  '🔍 /cekinvoice     Lihat & kelola invoice\n' +
+  '💳 /belumbayar     Daftar job belum bayar\n' +
+  '📅 /deadline       Job mendekati deadline\n' +
+  '🚫 /batal          Batalkan proses berjalan\n' +
+  '❓ /help           Bantuan ini\n' +
   `${SEP}\n` +
-  '🔗 Hubungkan bot: buka Pengaturan di web\n' +
-  'SiEdit, klik "Hubungkan Telegram", lalu\n' +
-  'kirim kode yang tampil.'
+  '🔗 Hubungkan: Pengaturan → Hubungkan Telegram'
 
 const wizardPrompts: { field: keyof WizardData; text: string }[] = [
   { field: 'nama_project', text: 'Nama project?' },
@@ -141,6 +139,10 @@ const wizardPrompts: { field: keyof WizardData; text: string }[] = [
   { field: 'status_cetak', text: 'Status cetak?\n1) Belum Cetak\n2) Sudah Dikirim\n3) Sudah Cetak' },
   { field: 'catatan', text: 'Catatan? Kirim "-" jika tidak ada.' },
 ]
+
+function kv(emoji: string, label: string, value: string): string {
+  return `${emoji} ${label.padEnd(10)}: ${value}`
+}
 
 function promptText(step: number, data: WizardData): string {
   const header = `➕ TAMBAH JOB BARU (${step}/8)\n${SEP}\n`
@@ -530,7 +532,13 @@ async function handleBuatinvoiceWizard(
     await sendMessage(
       token,
       chatId,
-      `✅ INVOICE DIBUAT\n${SEP}\n📋 Nomor    : ${invNumber}\n🏢 Vendor   : ${vendorNama}\n📅 Tanggal  : ${formatDate(today)}\n💰 Total    : ${fmtRupiah(confirm.total)}\n💳 Status   : Belum Bayar\n${SEP}\n📌 Job:\n${itemLines}\n${SEP}`,
+      `✅ INVOICE DIBUAT\n${SEP}\n` +
+      kv('📋', 'Nomor', invNumber) + '\n' +
+      kv('🏢', 'Vendor', vendorNama) + '\n' +
+      kv('📅', 'Tanggal', formatDate(today)) + '\n' +
+      kv('💰', 'Total', fmtRupiah(confirm.total)) + '\n' +
+      kv('💳', 'Status', 'Belum Bayar') + '\n' +
+      `${SEP}\n📌 Job:\n${itemLines}`,
     )
     return true
   }
@@ -544,13 +552,13 @@ function buildInvoiceSelectText(data: WizardData): string {
   const total = [...selected].reduce((s, i) => s + (jobs[i]?.sisa ?? 0), 0)
   const lines = jobs.map((j, i) => {
     const check = selected.has(i) ? '✅' : '❌'
-    return `${check} ${i + 1}. ${j.nama_project} — ${j.jenis_edit} — ${fmtRupiah(j.sisa)}`
+    return `${check} ${i + 1}. ${j.nama_project.padEnd(16)} ${j.jenis_edit.padEnd(10)} ${fmtRupiah(j.sisa)}`
   })
   return (
-    `📋 PILIH JOB (${jobs.length} total, ${selected.size} terpilih)\n${SEP}\n` +
-    lines.join('\n') +
-    `\n${SEP}\n💰 Total: ${fmtRupiah(total)}\n\n` +
-    'Kirim angka dipisah koma untuk toggle,\n"ok" untuk lanjut, atau /batal.'
+    `📋 PILIH JOB (${jobs.length} total, ${selected.size} dipilih)\n${SEP}\n` +
+    lines.join('\n') + '\n' +
+    `${SEP}\n💰 Total: ${fmtRupiah(total)}\n\n` +
+    'Kirim angka untuk toggle (contoh: 2,4)\n"ok" untuk lanjut, atau /batal'
   )
 }
 
@@ -584,12 +592,19 @@ async function handleBayarInvoiceWizard(
       .update({ wizard_step: 2, wizard_data: data, updated_at: new Date().toISOString() })
       .eq('user_id', user.user_id as string)
     const actions = inv.status_bayar === 'Lunas'
-      ? 'Balas:\n• "hapus" — hapus invoice ini'
-      : 'Balas:\n• "bayar" — catat pembayaran\n• "batal bayar" — batalkan semua pembayaran\n• "hapus" — hapus invoice ini'
+      ? '"hapus" — hapus invoice ini'
+      : '"bayar" — catat pembayaran\n"batal bayar" — batalkan semua pembayaran\n"hapus" — hapus invoice ini'
     await sendMessage(
       token,
       chatId,
-      `🧾 ${inv.nomor}\n${SEP}\n🏢 Vendor   : ${inv.vendor_nama}\n📅 Tanggal  : ${inv.nomor}\n💰 Total    : ${fmtRupiah(inv.total)}\n💳 Dibayar  : ${fmtRupiah(inv.total - inv.sisa)}\n💳 Sisa     : ${fmtRupiah(inv.sisa)}\n📊 Status   : ${inv.status_bayar}\n${SEP}\n${actions}`,
+      `🧾 ${inv.nomor}\n${SEP}\n` +
+      kv('🏢', 'Vendor', inv.vendor_nama) + '\n' +
+      kv('📅', 'Tanggal', formatDate(inv.tanggal)) + '\n' +
+      kv('💰', 'Total', fmtRupiah(inv.total)) + '\n' +
+      kv('💳', 'Dibayar', fmtRupiah(inv.total - inv.sisa)) + '\n' +
+      kv('💳', 'Sisa', fmtRupiah(inv.sisa)) + '\n' +
+      kv('📊', 'Status', inv.status_bayar) + '\n' +
+      `${SEP}\nBalas:\n${actions}`,
     )
     return true
   }
@@ -636,7 +651,9 @@ async function handleBayarInvoiceWizard(
       await sendMessage(
         token,
         chatId,
-        `💳 BAYAR ${inv.nomor}\nSisa: ${fmtRupiah(inv.sisa)}\nKirim jumlah, atau "lunas" untuk full.`,
+        `💳 BAYAR ${inv.nomor}\n${SEP}\n` +
+        kv('💰', 'Sisa', fmtRupiah(inv.sisa)) + '\n\n' +
+        'Kirim jumlah, atau "lunas" untuk full',
       )
       return true
     }
@@ -680,7 +697,12 @@ async function handleBayarInvoiceWizard(
     await sendMessage(
       token,
       chatId,
-      `💳 KONFIRMASI BAYAR\n${SEP}\n📋 Invoice  : ${inv.nomor}\n💰 Bayar    : ${fmtRupiah(jumlah)}\n📅 Tanggal  : ${formatDate(today)}\n💳 Sisa     : ${fmtRupiah(inv.sisa - jumlah)}\n${SEP}\nBalas "ya" untuk simpan, "batal" untuk batal.`,
+      `💳 KONFIRMASI BAYAR\n${SEP}\n` +
+      kv('📋', 'Invoice', inv.nomor) + '\n' +
+      kv('💰', 'Bayar', fmtRupiah(jumlah)) + '\n' +
+      kv('📅', 'Tanggal', formatDate(today)) + '\n' +
+      kv('💳', 'Sisa', fmtRupiah(inv.sisa - jumlah)) + '\n' +
+      `${SEP}\nBalas "ya" untuk simpan, "batal" untuk batal`,
     )
     return true
   }
@@ -828,19 +850,18 @@ async function confirmText(
   data: WizardData,
 ): Promise<string> {
   const vendorLabel = data.vendor_id ? await getVendorName(supabase, data.vendor_id) : '-'
-  const row = (emoji: string, label: string, value: string) => `${emoji} ${label.padEnd(9)}: ${value}`
   return (
     `📝 KONFIRMASI JOB BARU\n${SEP}\n` +
-    row('📌', 'Nama', data.nama_project ?? '-') + '\n' +
-    row('🏢', 'Vendor', vendorLabel) + '\n' +
-    row('🎨', 'Jenis', data.jenis_edit ?? '-') + '\n' +
-    row('💰', 'Harga', fmtRupiah(data.harga ?? 0)) + '\n' +
-    row('📅', 'Deadline', formatDate(data.deadline)) + '\n' +
-    row('🔧', 'Status', data.status_edit ?? '-') + '\n' +
-    row('💳', 'Bayar', data.status_bayar ?? '-') + '\n' +
-    row('🖨️', 'Cetak', data.status_cetak ?? '-') + '\n' +
-    row('📝', 'Catatan', data.catatan ?? '-') + '\n\n' +
-    'Balas "ya" untuk menyimpan,\natau "batal" untuk membatalkan.'
+    kv('📌', 'Nama', data.nama_project ?? '-') + '\n' +
+    kv('🏢', 'Vendor', vendorLabel) + '\n' +
+    kv('🎨', 'Jenis', data.jenis_edit ?? '-') + '\n' +
+    kv('💰', 'Harga', fmtRupiah(data.harga ?? 0)) + '\n' +
+    kv('📅', 'Deadline', formatDate(data.deadline)) + '\n' +
+    kv('🔧', 'Status', data.status_edit ?? '-') + '\n' +
+    kv('💳', 'Bayar', data.status_bayar ?? '-') + '\n' +
+    kv('🖨️', 'Cetak', data.status_cetak ?? '-') + '\n' +
+    kv('📝', 'Catatan', data.catatan ?? '-') + '\n' +
+    `${SEP}\nBalas "ya" untuk menyimpan\natau "batal" untuk membatalkan`
   )
 }
 
@@ -867,23 +888,24 @@ function cmpVendorThenName(
 
 function buildGroupedMessage(header: string, groups: GroupBlock[], footer?: string): string {
   const budget = 3800
-  let lines: string[] = [header]
-  let len = header.length + 1
+  let lines: string[] = [header, SEP]
+  let len = header.length + SEP.length + 2
   let summarized = false
   let no = 0
   const tail: string[] = []
 
   for (const g of groups) {
     if (!summarized) {
-      const block = [SEP, `🏬 ${g.vendor} — ${g.items.length} job • ${fmtRupiah(g.subtotal)}`]
+      const block = [`🏬 ${g.vendor.toUpperCase()} (${g.items.length})`]
       for (const it of g.items) {
         no++
         block.push(`   ${no}. ${it}`)
       }
+      block.push(`   💰 Subtotal: ${fmtRupiah(g.subtotal)}`)
       const blockLen = block.reduce((s, l) => s + l.length + 1, 0)
       if (len + blockLen <= budget) {
-        lines.push(...block)
-        len += blockLen
+        lines.push(...block, '')
+        len += blockLen + 1
         continue
       }
       summarized = true
@@ -892,10 +914,10 @@ function buildGroupedMessage(header: string, groups: GroupBlock[], footer?: stri
   }
 
   if (tail.length > 0) {
-    lines.push(SEP, `📌 Ringkasan sisa (${tail.length} vendor):`, ...tail)
+    lines.push(`📌 Ringkasan sisa (${tail.length} vendor):`, ...tail, '')
   }
-  if (footer) lines.push(SEP, footer)
-  return lines.join('\n')
+  if (footer) lines.push(footer)
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 Deno.serve(async (req) => {
@@ -998,7 +1020,7 @@ Deno.serve(async (req) => {
     }
     const { data: invs, error } = await supabase
       .from('invoice')
-      .select('id, nomor, vendor_nama, total, status_bayar, items_json')
+      .select('id, nomor, vendor_nama, total, status_bayar, items_json, created_at')
       .eq('user_id', user.user_id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
@@ -1015,14 +1037,14 @@ Deno.serve(async (req) => {
       let items: { harga?: number }[] = []
       try { items = JSON.parse(inv.items_json ?? '[]') } catch { items = [] }
       const totalInv = items.reduce((s, it) => s + (it.harga ?? 0), 0)
-      // Hitung sisa dari total - pembayaran
       return {
         id: inv.id,
         nomor: inv.nomor ?? '-',
         vendor_nama: inv.vendor_nama,
         total: inv.total ?? totalInv,
-        sisa: inv.total ?? totalInv, // sisa akan dihitung nanti
+        sisa: inv.total ?? totalInv,
         status_bayar: inv.status_bayar ?? 'Belum Bayar',
+        tanggal: inv.created_at?.slice(0, 10) ?? '',
       }
     })
     // Ambil total pembayaran untuk setiap invoice
@@ -1044,12 +1066,13 @@ Deno.serve(async (req) => {
       .eq('user_id', user.user_id)
     const lines = invList.map((inv, i) => {
       const statusIcon = inv.status_bayar === 'Lunas' ? '✅' : inv.status_bayar === 'DP' ? '🟡' : '🔴'
-      return `${i + 1}. ${inv.nomor} — ${inv.vendor_nama} — ${fmtRupiah(inv.total)} — ${statusIcon} ${inv.status_bayar}${inv.status_bayar !== 'Lunas' ? ` (Sisa ${fmtRupiah(inv.sisa)})` : ''}`
+      const sisaLine = inv.status_bayar !== 'Lunas' ? `\n           Sisa ${fmtRupiah(inv.sisa)}` : ''
+      return `${i + 1}. ${inv.nomor}  ${inv.vendor_nama.padEnd(12)} ${statusIcon} ${inv.status_bayar}\n           Total ${fmtRupiah(inv.total)}${sisaLine}`
     }).join('\n')
     await sendMessage(
       token,
       chatId,
-      `🧾 INVOICE (${invList.length})\n${SEP}\n${lines}\n${SEP}\nBalas nomor invoice untuk kelola.`,
+      `🧾 INVOICE (${invList.length})\n${SEP}\n${lines}\n${SEP}\nBalas nomor untuk kelola`,
     )
     return new Response('ok')
   }
@@ -1227,7 +1250,7 @@ async function handleQuery(
     g.subtotal += j.harga
     const days = daysUntil(j.deadline ?? '')
     const label = days < 0 ? `Terlambat ${Math.abs(days)} hari` : days === 0 ? 'Hari ini' : days === 1 ? 'Besok' : `H-${days}`
-    g.items.push(`${j.nama_project} — ${formatDate(j.deadline)} (${label})`)
+    g.items.push(`${j.nama_project} — ${label}`)
   }
   const grandTotal = groups.reduce((s, g) => s + g.subtotal, 0)
   await sendMessage(

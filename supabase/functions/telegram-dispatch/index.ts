@@ -66,7 +66,8 @@ function buildMessage(
 
   for (const j of jobs) {
     const days = daysUntil(j.deadline ?? '')
-    const line = `${j.nama_project} (${j.jenis_edit}) — ${j.vendor?.nama ?? '-'}`
+    const vendor = j.vendor?.nama ?? '-'
+    const line = `${j.nama_project} — ${vendor}`
     if (days < 0) groups[0].items.push(line)
     else if (days === 0) groups[1].items.push(line)
     else if (days === 1) groups[2].items.push(line)
@@ -74,14 +75,15 @@ function buildMessage(
     else groups[4].items.push(line)
   }
 
-  const lines: string[] = ['📅 DEADLINE MENDEKAT']
+  const SEP = '——————————————'
+  const lines: string[] = ['📅 DEADLINE MENDEKAT', SEP]
   for (const g of groups) {
     if (g.items.length === 0) continue
-    lines.push('')
     lines.push(`${g.header} (${g.items.length})`)
     for (const it of g.items) lines.push(`• ${it}`)
+    lines.push('')
   }
-  return lines.join('\n')
+  return lines.join('\n').trim()
 }
 
 Deno.serve(async (req) => {
