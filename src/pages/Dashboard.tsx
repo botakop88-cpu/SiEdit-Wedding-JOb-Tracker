@@ -306,7 +306,7 @@ export default function Dashboard() {
         {/* Deadline Hari Ini */}
         <section className="card p-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-bold text-slate-900">Deadline Hari Ini</h2>
+            <h2 className="font-bold text-slate-900">Deadline Mendatang</h2>
             <button onClick={() => navigate('/jobs')} className="text-sm text-rose-500 hover:text-rose-600 font-medium">
               Lihat Semua
             </button>
