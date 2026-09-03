@@ -4,7 +4,7 @@ import { Briefcase, CreditCard, CalendarClock, Wallet, Search, Download, CheckCi
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import type { Job } from '../lib/types'
-import { rupiah, todayStr, timeAgo, formatDate } from '../lib/utils'
+import { rupiah, todayStr, timeAgo, formatDate, daysUntil } from '../lib/utils'
 
 interface Stats {
   totalJob: number
@@ -14,6 +14,20 @@ interface Stats {
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+
+function deadlineLabel(deadline: string | null, statusCetak?: string): { label: string; color: string } {
+  if (!deadline) return { label: '', color: '' }
+  const days = daysUntil(deadline)
+  if (days < 0) {
+    if (statusCetak === 'Sudah Cetak') return { label: 'Tepat Waktu', color: 'text-emerald-600' }
+    return { label: 'Terlambat', color: 'text-red-600' }
+  }
+  if (days === 0) return { label: 'Hari Ini', color: 'text-red-600' }
+  if (days === 1) return { label: 'Besok', color: 'text-orange-600' }
+  if (days === 2) return { label: '2 Hari Lagi', color: 'text-yellow-600' }
+  if (days === 3) return { label: '3 Hari Lagi', color: 'text-slate-600' }
+  return { label: '', color: '' }
+}
 
 const ACTIVITY_META: Record<string, { icon: typeof Inbox; bg: string; fg: string }> = {
   Masuk: { icon: Inbox, bg: 'bg-blue-50', fg: 'text-blue-500' },
@@ -75,7 +89,7 @@ export default function Dashboard() {
       supabase.from('job_payment').select('jumlah, tanggal').gte('tanggal', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
         .not('deadline', 'is', null).lte('deadline', maxDeadline)
-        .not('status_edit', 'in', '("Selesai")').order('deadline').limit(10),
+        .not('status_edit', 'in', '("Selesai")').order('deadline', { ascending: false }).limit(15),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('created_at', { ascending: false }).limit(5),
       supabase.from('job').select('status_edit').is('deleted_at', null),
       supabase.from('job').select('created_at, status_edit, tanggal_lunas').is('deleted_at', null),
@@ -301,15 +315,20 @@ export default function Dashboard() {
             <p className="text-sm text-slate-400 py-8 text-center">Tidak ada deadline 🎉</p>
           ) : (
             <div className="space-y-1">
-              {deadlineJobs.map((j, idx) => (
+              {deadlineJobs.map((j, idx) => {
+                const dl = deadlineLabel(j.deadline, j.status_cetak)
+                return (
                 <div key={j.id} className="flex items-start gap-3">
                   <div className="flex flex-col items-center shrink-0 w-16">
                     <span className="text-[10px] font-bold text-slate-900 leading-tight text-center">{formatDate(j.deadline)}</span>
-                    <div className="w-2 h-2 rounded-full bg-rose-500 mt-1" />
+                    <div className={`w-2 h-2 rounded-full mt-1 ${dl.label === 'Terlambat' || dl.label === 'Hari Ini' ? 'bg-red-500' : dl.label === 'Besok' ? 'bg-orange-500' : 'bg-rose-500'}`} />
                     {idx < deadlineJobs.length - 1 && <div className="w-0.5 h-14 bg-slate-200 mt-1" />}
                   </div>
                   <div className="flex-1 min-w-0 pt-1">
-                    <p className="font-semibold text-slate-900 text-sm">{j.nama_project}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-slate-900 text-sm">{j.nama_project}</p>
+                      {dl.label && <span className={`text-[10px] font-semibold ${dl.color}`}>{dl.label}</span>}
+                    </div>
                     <p className="text-xs text-slate-500">Pernikahan {j.vendor?.nama ?? '-'}</p>
                     <span className="inline-block mt-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-700">
                       {j.jenis_edit}
@@ -317,7 +336,8 @@ export default function Dashboard() {
                   </div>
                   <button className="text-slate-400 hover:text-slate-600 shrink-0">→</button>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </section>
