@@ -52,25 +52,16 @@ function daysUntil(dateStr: string): number {
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-function daysLabel(days: number): string {
-  if (days < 0) return `Terlambat ${Math.abs(days)} hari`
-  if (days === 0) return 'Deadline hari ini'
-  if (days === 1) return 'Deadline besok'
-  return `Deadline H-${days}`
-}
-
 function buildMessage(
   jobs: {
     nama_project: string
     jenis_edit: string
     deadline: string | null
     status_edit: string
-    status_bayar: string
     vendor?: { nama: string } | null
   }[],
-  dateLabel: string,
 ): string {
-  const groups: { header: string; items: { nama: string; detail: string; label: string }[] }[] = [
+  const groups: { header: string; items: string[] }[] = [
     { header: '⛔ TERLAMBAT', items: [] },
     { header: '🔴 HARI INI', items: [] },
     { header: '🟠 BESOK', items: [] },
@@ -80,27 +71,20 @@ function buildMessage(
 
   for (const j of jobs) {
     const days = daysUntil(j.deadline ?? '')
-    const detail = `${j.nama_project} (${j.jenis_edit}) - ${j.vendor?.nama ?? '-'}`
-    const label = daysLabel(days)
-    const item = { nama: detail, detail: `🗓 ${j.deadline ?? '-'} • ${label}`, label }
-    if (days < 0) groups[0].items.push(item)
-    else if (days === 0) groups[1].items.push(item)
-    else if (days === 1) groups[2].items.push(item)
-    else if (days === 2) groups[3].items.push(item)
-    else groups[4].items.push(item)
+    const line = `${j.nama_project} (${j.jenis_edit}) — ${j.vendor?.nama ?? '-'}`
+    if (days < 0) groups[0].items.push(line)
+    else if (days === 0) groups[1].items.push(line)
+    else if (days === 1) groups[2].items.push(line)
+    else if (days === 2) groups[3].items.push(line)
+    else groups[4].items.push(line)
   }
 
-  const lines: string[] = []
-  lines.push(`🔔 *RINGKASAN DEADLINE SIEDIT*`)
-  lines.push(`📅 ${dateLabel}`)
+  const lines: string[] = ['📅 DEADLINE MENDEKAT']
   for (const g of groups) {
     if (g.items.length === 0) continue
     lines.push('')
-    lines.push(`*${g.header} (${g.items.length})*`)
-    for (const it of g.items) {
-      lines.push(`• ${it.nama}`)
-      lines.push(`  ${it.detail}`)
-    }
+    lines.push(`${g.header} (${g.items.length})`)
+    for (const it of g.items) lines.push(`• ${it}`)
   }
   return lines.join('\n')
 }
@@ -138,24 +122,18 @@ Deno.serve(async (req) => {
 
     const { data: jobs, error: jErr } = await supabase
       .from('job')
-      .select('nama_project, jenis_edit, deadline, status_edit, status_bayar, vendor:vendor_id(nama)')
+      .select('nama_project, jenis_edit, deadline, status_edit, vendor:vendor_id(nama)')
       .eq('user_id', s.user_id)
       .is('deleted_at', null)
       .not('deadline', 'is', null)
       .lte('deadline', maxDate)
       .not('status_edit', 'in', '("Selesai")')
-      .neq('status_bayar', 'Lunas')
       .order('deadline')
 
     if (jErr) continue
     if (!jobs || jobs.length === 0) continue
 
-    const dateLabel = new Date(todayWIBStr() + 'T00:00:00').toLocaleDateString('id-ID', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    })
-    const text = buildMessage(jobs as never[], dateLabel)
+    const text = buildMessage(jobs as never[])
 
     const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
       method: 'POST',
@@ -163,7 +141,6 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         chat_id: s.telegram_chat_id,
         text,
-        parse_mode: 'Markdown',
         disable_web_page_preview: true,
       }),
     })
