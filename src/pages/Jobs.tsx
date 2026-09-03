@@ -118,7 +118,7 @@ export default function Jobs() {
       result = result.filter((j) => {
         if (!j.deadline) return false
         const d = daysUntil(j.deadline)
-        return d >= 0 && d <= 3
+        return d <= 3
       })
     }
     else if (quickFilter === 'Sudah Cetak') result = result.filter((j) => j.status_cetak === 'Sudah Cetak')
