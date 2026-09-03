@@ -21,3 +21,9 @@ npm-debug.log*
 node_modules.rar
 .vercel
 .env*
+
+# test & audit scripts (contain hardcoded credentials)
+check-*.mjs
+test-*.mjs
+verify-*.mjs
+audit-report.json
