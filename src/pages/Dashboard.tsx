@@ -62,19 +62,19 @@ export default function Dashboard() {
 
     const d3 = new Date()
     d3.setDate(d3.getDate() + 3)
-    const maxDeadline = d3.toISOString().slice(0, 10)
+    const maxDeadline = `${d3.getFullYear()}-${String(d3.getMonth() + 1).padStart(2, '0')}-${String(d3.getDate()).padStart(2, '0')}`
 
     const [totalRes, belumBayarRes, deadlineRes, chartRes, deadlineJobsRes, recentRes, statusRes, lineRes, vendorRes, piutangRes] = await Promise.all([
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null),
       supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).neq('status_bayar', 'Lunas'),
-      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).eq('deadline', today)
+      supabase.from('job').select('*', { count: 'exact', head: true }).is('deleted_at', null).not('deadline', 'is', null).lte('deadline', today)
         .not('status_edit', 'in', '("Selesai")'),
       // Basis grafik pendapatan: job_payment (mencakup DP/cicilan), bukan cuma job Lunas
       // penuh — supaya DP yang diterima bulan ini ikut terhitung sebagai pendapatan
       // bulan ini walau job-nya baru lunas penuh di bulan lain (atau belum lunas sama sekali).
       supabase.from('job_payment').select('jumlah, tanggal').gte('tanggal', startStr),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null)
-        .not('deadline', 'is', null).gte('deadline', today).lte('deadline', maxDeadline)
+        .not('deadline', 'is', null).lte('deadline', maxDeadline)
         .not('status_edit', 'in', '("Selesai")').order('deadline').limit(10),
       supabase.from('job').select('*, vendor:vendor_id(nama)').is('deleted_at', null).order('created_at', { ascending: false }).limit(5),
       supabase.from('job').select('status_edit').is('deleted_at', null),
